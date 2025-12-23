@@ -105,3 +105,5 @@ htmlcov/
 *.bak
 *.swp
 *~
+
+AGENTS.md
