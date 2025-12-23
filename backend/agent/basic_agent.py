@@ -2,7 +2,7 @@
 
 import asyncio
 import json
-import os
+import logging
 import time
 from livekit import rtc
 from livekit.agents import (
@@ -15,11 +15,13 @@ from livekit.agents import (
 from livekit.plugins import openai
 from langchain_openai import ChatOpenAI
 from agent.langchain_agent import create_paradise_agent, get_agent_response
+from config import config
+
+logger = logging.getLogger(__name__)
 
 
 async def entrypoint(ctx: JobContext):
     """Entry point for the agent when it joins a room."""
-    
     try:
         await ctx.connect()
     except Exception as e:
@@ -37,9 +39,9 @@ async def entrypoint(ctx: JobContext):
         temperature=0.7,
     )
     
-    use_rag = bool(os.getenv("PINECONE_API_KEY"))
+    use_rag = config.is_rag_enabled()
     
-    use_tools = bool(os.getenv("SERPAPI_API_KEY") or os.getenv("GOOGLE_PLACES_API_KEY"))
+    use_tools = config.are_tools_enabled()
     
     announcement_queue = asyncio.Queue()
     
@@ -218,24 +220,118 @@ async def entrypoint(ctx: JobContext):
         is_speaking = True
         frame_count = 0
         
+        room_state = ctx.room.connection_state
+        room_state_int = int(room_state)
+        if room_state_int == 0:
+            logger.warning(
+                "Audio: Room disconnected, skipping output",
+                extra={
+                    "room_state": str(room_state),
+                    "room_state_int": room_state_int,
+                    "text_length": len(text),
+                }
+            )
+            is_speaking = False
+            return
+        
+        audio_track_published = False
+        for publication in ctx.room.local_participant.track_publications.values():
+            if publication.track and publication.track.name == "agent-voice":
+                audio_track_published = True
+                break
+        
+        if not audio_track_published:
+            logger.warning(
+                "Audio: Track not published, skipping output",
+                extra={"text_length": len(text)}
+            )
+            is_speaking = False
+            return
+        
         try:
             async for output in tts_engine.synthesize(text):
-                if hasattr(output, 'frame') and output.frame:
-                    frame_count += 1
-                    await agent_audio_source.capture_frame(output.frame)
-                elif hasattr(output, 'audio') and output.audio:
-                    frame_count += 1
-                    if hasattr(output.audio, 'frame'):
-                        await agent_audio_source.capture_frame(output.audio.frame)
+                current_state = int(ctx.room.connection_state)
+                if current_state == 0:
+                    logger.debug(
+                        "Audio: Room disconnected during synthesis",
+                        extra={
+                            "room_state": str(ctx.room.connection_state),
+                            "room_state_int": current_state,
+                            "frames_sent": frame_count,
+                        }
+                    )
+                    break
+                
+                try:
+                    if hasattr(output, 'frame') and output.frame:
+                        frame_count += 1
+                        await agent_audio_source.capture_frame(output.frame)
+                    elif hasattr(output, 'audio') and output.audio:
+                        frame_count += 1
+                        if hasattr(output.audio, 'frame'):
+                            await agent_audio_source.capture_frame(output.audio.frame)
+                except rtc.RtcError as rtc_error:
+                    error_msg = str(rtc_error)
+                    if "InvalidState" in error_msg or "invalid state" in error_msg.lower():
+                        logger.warning(
+                            "Audio: Capture failed (InvalidState)",
+                            extra={
+                                "error": str(rtc_error),
+                                "room_state": str(ctx.room.connection_state),
+                                "frames_sent": frame_count,
+                            }
+                        )
+                        break
+                    else:
+                        logger.error(
+                            "Audio: RTC error during capture",
+                            extra={
+                                "error": str(rtc_error),
+                                "error_type": type(rtc_error).__name__,
+                                "frames_sent": frame_count,
+                            }
+                        )
+                        raise
+                except Exception as frame_error:
+                    logger.warning(
+                        "Audio: Frame capture error",
+                        extra={
+                            "error": str(frame_error),
+                            "error_type": type(frame_error).__name__,
+                            "frames_sent": frame_count,
+                        }
+                    )
+                    continue
         except Exception as e:
             error_msg = str(e)
             if "429" in error_msg or "quota" in error_msg.lower() or "insufficient_quota" in error_msg.lower():
-                pass
+                logger.warning(
+                    "Audio: TTS quota exceeded",
+                    extra={
+                        "error": error_msg,
+                        "text_length": len(text),
+                    }
+                )
             else:
-                import traceback
-                traceback.print_exc()
+                logger.error(
+                    "Audio: TTS synthesis error",
+                    extra={
+                        "error": str(e),
+                        "error_type": type(e).__name__,
+                        "text_length": len(text),
+                    },
+                    exc_info=True
+                )
         finally:
             is_speaking = False
+            if frame_count > 0:
+                logger.debug(
+                    "Audio: Output completed",
+                    extra={
+                        "frames_sent": frame_count,
+                        "text_length": len(text),
+                    }
+                )
     
     greeting = "Hey! I'm Paradise, your travel planning buddy. What can I help you with today?"
     await send_transcript(ctx.room, greeting, is_user=False)

@@ -1,8 +1,8 @@
 """LangChain agent setup for Paradise voice agent."""
 
-import os
 import json
 from langchain_openai import ChatOpenAI
+from config import config
 from langchain.prompts import ChatPromptTemplate, MessagesPlaceholder
 from langchain.schema import HumanMessage, AIMessage
 from langchain.chains import ConversationalRetrievalChain
@@ -11,7 +11,13 @@ from langchain.tools import StructuredTool, tool
 from langchain.agents import AgentExecutor, create_openai_tools_agent
 from langchain.callbacks.base import BaseCallbackHandler
 from langchain.schema import AgentAction, AgentFinish, LLMResult
-from rag.retriever import create_vector_store, get_retriever
+from rag.retriever import (
+    create_vector_store,
+    get_retriever,
+    create_metadata_filter,
+    get_namespace_for_destination,
+)
+from rag.document_classifier import extract_destination_from_content, extract_all_destinations
 from tools.flights import get_flight_prices
 from tools.places import search_places
 
@@ -66,44 +72,247 @@ class ToolCallCallbackHandler(BaseCallbackHandler):
         pass
 
 
-def create_rag_tool(retriever):
-    """Create a RAG tool that wraps the retriever for agentic RAG."""
+def create_rag_tool(vector_store):
+    """
+    Create a RAG tool that wraps the retriever for agentic RAG with destination-aware filtering.
+    
+    Args:
+        vector_store: Pinecone vector store instance
+    """
     @tool
-    def retrieve_travel_info(query: str) -> str:
-        """Retrieve travel information from the travel guide knowledge base. This is primarily used in Phase 5 (Itinerary Building) of the travel planning workflow.
+    def retrieve_travel_info(query: str, destination: str = None, section: str = None) -> str:
+        """Retrieve detailed travel information from UPLOADED PDF DOCUMENTS and travel guides stored in the knowledge base.
         
-        ROLE IN ITINERARY PLANNING:
-        - Phase 5 (Itinerary Building): Use this tool to get destination-specific activities, attractions, must-see sights, cultural experiences, and day trip options
-        - Provides detailed information from travel guides and PDFs to help build comprehensive day-by-day itineraries
-        - Use when synthesizing complete travel plans that combine flights, hotels, and activities
+        ⚠️ CRITICAL: This tool ONLY searches UPLOADED DOCUMENTS/PDFs that have been uploaded to the system. 
+        It does NOT search the internet, real-time data, or current business listings.
         
-        WHEN TO USE:
-        - When user asks for "itinerary", "plan", "schedule", or "what should I do"
-        - When building day-by-day plans that need destination-specific activity recommendations
-        - When user asks about things to do, attractions, or experiences in a destination
-        - When you need detailed information about a destination to create a comprehensive itinerary
+        WHEN TO USE THIS TOOL (retrieve_travel_info):
+        ✅ ALWAYS USE when:
+        - User mentions "guide", "PDF", "document", "travel guide", "Switzerland travel guide", etc.
+        - User asks about information from uploaded documents: "What does the guide say about...?"
+        - User asks about attractions, sights, things to do, activities FROM UPLOADED GUIDES
+        - User asks for cultural information, history, tips, recommendations FROM DOCUMENTS
+        - Building itineraries using content from uploaded travel guides
+        - Questions about experiences, day trips, cultural sites, landmarks FROM GUIDES
         
-        EXAMPLE QUERIES FOR ITINERARY BUILDING:
-        - "top attractions in [destination]"
-        - "must-see sights [destination]"
-        - "day trips from [destination]"
-        - "cultural experiences [destination]"
-        - "things to do [destination] [number] days"
+        ✅ USE when user asks about destinations that likely have uploaded guides:
+        - "attractions in Zurich" → Check if Zurich/Switzerland guide is uploaded
+        - "what to see in Switzerland" → Check uploaded Switzerland guides
+        - "Historic Cogwheel Railway" → Check uploaded guides (likely in Switzerland guide)
         
-        This searches the uploaded travel PDFs and travel guides for destination-specific information.
+        ❌ DO NOT USE for:
+        - Real-time hotel/restaurant search → Use search_places instead
+        - Current business information → Use search_places instead
+        - Specific business names or addresses → Use search_places instead
+        - Flight prices → Use get_flight_prices instead
+        - When user explicitly wants real-time/current information
+        
+        WHEN TO USE search_places INSTEAD:
+        - User asks "find me hotels", "restaurants near me", "places to eat" (real-time search)
+        - User needs current business listings, ratings, addresses
+        - User asks for specific business names or locations (real-time data)
+        - Real-time search of businesses, hotels, restaurants
+        
+        DESTINATION EXTRACTION:
+        - Automatically extracts destinations from queries (e.g., "Zurich and Switzerland" → extracts both)
+        - Handles document references: "Switzerland travel guide" → extracts "Switzerland"
+        - Supports multiple destinations in one query
+        - Automatically maps cities to countries (e.g., Zurich → Switzerland)
+        - Searches hierarchically: city namespace → country namespace → general namespace
+        
+        SECTION FILTERING:
+        - Automatically detects section type from query keywords
+        - Filter by: attractions, restaurants, hotels, transport, culture, tips
+        - Examples: "attractions in Zurich" → section="attractions"
+        
+        EXAMPLE QUERIES:
+        - "information about Zurich and Switzerland" → Searches both Zurich and Switzerland namespaces
+        - "Switzerland travel guide" → Extracts "Switzerland" and searches that namespace
+        - "attractions in Zurich" → Searches Zurich namespace with section="attractions"
+        - "Historic Cogwheel Railway" → Searches all namespaces, likely finds in Switzerland guide
+        - "what does the guide say about Jungfrau Region?" → Searches uploaded guides
         
         Args:
             query: The search query about travel destinations, activities, attractions, or places to visit
+            destination: Optional destination name to filter results (e.g., "Tokyo", "Paris", "Zurich")
+            section: Optional section type to filter: attractions, restaurants, hotels, transport, culture, tips
         """
-        docs = retriever.invoke(query)
-        if not docs:
-            return "No relevant travel information found in the archives."
+        import logging
+        logger = logging.getLogger(__name__)
         
-        result = "\n\n".join([
-            f"Source: {doc.metadata.get('source', 'Travel Guide')}\nContent: {doc.page_content}"
-            for doc in docs
-        ])
-        return result
+        # Structured logging for RAG retrieval attempt
+        log_context = {
+            "tool": "retrieve_travel_info",
+            "query": query,
+            "destination_provided": destination is not None,
+        }
+        
+        # Extract destination from query if not provided
+        # This now handles multiple destinations and document references
+        if not destination:
+            destination = extract_destination_from_content(query)
+            log_context["destination_extracted"] = destination
+            logger.info(f"RAG: Extracted destination from query", extra=log_context)
+        
+        # Also extract all destinations mentioned in query for multi-destination search
+        all_destinations = extract_all_destinations(query.lower())
+        additional_namespaces = []
+        if all_destinations and len(all_destinations) > 1:
+            log_context["multiple_destinations"] = all_destinations
+            logger.info(f"RAG: Found multiple destinations in query", extra=log_context)
+            # Use the most specific destination (city over country) as primary
+            from rag.retriever import get_country_from_city, get_namespace_for_destination
+            cities = [d for d in all_destinations if get_country_from_city(d)]
+            if cities:
+                destination = cities[0]  # Use first city found
+                # Add other destinations as additional namespaces
+                for other_dest in all_destinations:
+                    if other_dest != destination:
+                        ns = get_namespace_for_destination(other_dest)
+                        if ns not in additional_namespaces:
+                            additional_namespaces.append(ns)
+            else:
+                destination = all_destinations[0]  # Use first destination
+                # Add other destinations as additional namespaces
+                for other_dest in all_destinations[1:]:
+                    ns = get_namespace_for_destination(other_dest)
+                    if ns not in additional_namespaces:
+                        additional_namespaces.append(ns)
+        
+        # Handle city-to-country mapping for better namespace search
+        # If destination is a city, we'll search both city and country namespaces
+        original_destination = destination
+        country_from_city = None
+        if destination:
+            from rag.retriever import get_country_from_city
+            country_from_city = get_country_from_city(destination)
+            if country_from_city:
+                log_context["city_mapped_to_country"] = country_from_city
+                logger.info(f"RAG: Mapped city to country", extra=log_context)
+        
+        # Determine section from query if not provided
+        if not section:
+            query_lower = query.lower()
+            if any(kw in query_lower for kw in ["restaurant", "dining", "food", "eat", "cafe"]):
+                section = "restaurants"
+            elif any(kw in query_lower for kw in ["hotel", "accommodation", "stay", "lodging"]):
+                section = "hotels"
+            elif any(kw in query_lower for kw in ["transport", "airport", "train", "bus", "metro", "getting around"]):
+                section = "transport"
+            elif any(kw in query_lower for kw in ["attraction", "sight", "monument", "museum", "must-see"]):
+                section = "attractions"
+            elif any(kw in query_lower for kw in ["culture", "tradition", "festival", "history"]):
+                section = "culture"
+            elif any(kw in query_lower for kw in ["tip", "advice", "recommendation"]):
+                section = "tips"
+        
+        # Create metadata filter
+        metadata_filter = create_metadata_filter(
+            destination=destination,
+            section=section,
+        )
+        
+        # Get hierarchical namespaces (city → country → general)
+        from rag.retriever import get_hierarchical_namespaces
+        namespaces_to_try = get_hierarchical_namespaces(destination) if destination else ["general"]
+        
+        log_context.update({
+            "destination": destination,
+            "section": section,
+            "namespaces": namespaces_to_try,
+            "additional_namespaces": additional_namespaces,
+        })
+        logger.info(f"RAG: Starting retrieval", extra=log_context)
+        
+        # Use the first namespace for initial search (hierarchical search happens in FilteredRetriever)
+        namespace = namespaces_to_try[0] if namespaces_to_try else None
+        
+        # Create filtered retriever
+        try:
+            log_context["retriever_config"] = {
+                "k": 5,
+                "has_filter": metadata_filter is not None,
+                "namespace": namespace,
+                "additional_namespaces_count": len(additional_namespaces),
+            }
+            logger.debug(f"RAG: Creating retriever", extra=log_context)
+            retriever = get_retriever(
+                vector_store,
+                k=5,  # Get top 5 results
+                filter=metadata_filter,
+                namespace=namespace,
+                additional_namespaces=additional_namespaces,
+            )
+            
+            # Retrieve documents (hierarchical namespace search happens in FilteredRetriever)
+            logger.debug(f"RAG: Invoking retriever", extra=log_context)
+            docs = retriever.invoke(query)
+            log_context["documents_found"] = len(docs)
+            logger.info(f"RAG: Retrieved documents", extra=log_context)
+            
+            if not docs:
+                log_context["fallback_triggered"] = True
+                logger.warning(f"RAG: No documents found with filters, trying fallback", extra=log_context)
+                # Try without filters if no results
+                if metadata_filter or namespace:
+                    try:
+                        retriever_fallback = get_retriever(vector_store, k=5)
+                        docs = retriever_fallback.invoke(query)
+                        log_context["fallback_documents_found"] = len(docs)
+                        logger.info(f"RAG: Fallback retrieval completed", extra=log_context)
+                    except Exception as e:
+                        log_context["fallback_error"] = str(e)
+                        logger.warning(f"RAG: Fallback retrieval failed", extra=log_context, exc_info=True)
+                        docs = []
+                
+                if not docs:
+                    log_context["result"] = "no_documents_found"
+                    logger.warning(f"RAG: No documents found after fallback", extra=log_context)
+                    return "No relevant travel information found in the archives."
+        except Exception as e:
+            # Log error for debugging
+            log_context["error"] = str(e)
+            log_context["error_type"] = type(e).__name__
+            logger.error(f"RAG: Error in retrieval", extra=log_context, exc_info=True)
+            # Try fallback without filters
+            try:
+                log_context["fallback_attempt"] = True
+                logger.info("RAG: Attempting fallback retrieval", extra=log_context)
+                retriever_fallback = get_retriever(vector_store, k=5)
+                docs = retriever_fallback.invoke(query)
+                log_context["fallback_documents_found"] = len(docs)
+                logger.info(f"RAG: Fallback retrieval completed", extra=log_context)
+                if not docs:
+                    return "No relevant travel information found in the archives. Please try rephrasing your question."
+            except Exception as fallback_error:
+                log_context["fallback_error"] = str(fallback_error)
+                logger.error(f"RAG: Fallback retrieval failed", extra=log_context, exc_info=True)
+                return "Unable to retrieve travel information at this time. Please try again later."
+        
+        # Format results with enhanced metadata
+        log_context["documents_formatted"] = len(docs)
+        logger.debug(f"RAG: Formatting documents for response", extra=log_context)
+        results = []
+        for i, doc in enumerate(docs[:5]):  # Limit to top 5
+            metadata = doc.metadata
+            logger.debug(f"Document {i+1}: metadata keys={list(metadata.keys())}, content_length={len(doc.page_content) if doc.page_content else 0}")
+            source = metadata.get("source_file", metadata.get("source", "Travel Guide"))
+            doc_title = metadata.get("document_title", source)
+            doc_destination = metadata.get("destination", "")
+            doc_section = metadata.get("section", "")
+            
+            # Build source string
+            source_parts = [doc_title]
+            if doc_destination:
+                source_parts.append(f"({doc_destination})")
+            if doc_section and doc_section != "general":
+                source_parts.append(f"[{doc_section}]")
+            
+            source_str = " - ".join(source_parts)
+            
+            results.append(f"Source: {source_str}\nContent: {doc.page_content}")
+        
+        return "\n\n".join(results)
     
     return retrieve_travel_info
 
@@ -128,6 +337,13 @@ def create_tools():
         - departure: Departure city/airport code (REQUIRED - MUST be explicitly stated by user)
         - arrival: Arrival city/airport code (REQUIRED - ask user if not provided)
         - date: Departure date in YYYY-MM-DD format (REQUIRED - ask user if not provided)
+        
+        DESTINATION VALIDATION:
+        - This tool automatically validates that both departure and arrival destinations are real places
+        - If a destination is fictional or unclear (e.g., "Wizard Land"), the tool will return an error
+        - When you receive a validation error, ask the user to clarify or provide the correct destination name
+        - Use your knowledge to detect obviously fictional places before calling the tool (e.g., "Hogwarts", "Wizard Land")
+        - If a destination seems unclear or potentially fictional, ask the user to clarify BEFORE calling this tool
         
         DO NOT call this tool if any required parameter is missing. Ask the user for missing information first.
         DO NOT infer or assume cities or dates. Only use information explicitly stated by the user.
@@ -211,10 +427,60 @@ YOUR PRIMARY GOAL: Help users plan complete travel itineraries by proactively gu
 
 You are not just a Q&A assistant - you are a proactive travel planner that builds complete trip plans. Always suggest the next step in the planning process after completing each phase.
 
+TOOL SELECTION - CRITICAL DECISION MAKING:
+
+You have access to three main tools. Choose the RIGHT tool based on what the user is asking:
+
+1. retrieve_travel_info (RAG - searches UPLOADED PDFs/guides):
+   ✅ USE WHEN:
+   - User asks about attractions, sights, things to do, activities
+   - User asks "what should I see", "attractions", "must-see places", "what to do"
+   - User asks for cultural information, history, tips, recommendations from guides
+   - Building itineraries that need destination-specific content
+   - User mentions "guide", "PDF", "document", or asks about uploaded content
+   - Questions about experiences, day trips, cultural sites, landmarks
+   - Detailed information about destinations from travel guides
+   
+   ❌ DO NOT USE for:
+   - Real-time hotel/restaurant search → Use search_places instead
+   - Current business information → Use search_places instead
+   - Specific business names or addresses → Use search_places instead
+
+2. search_places (Real-time Google Places API):
+   ✅ USE WHEN:
+   - User asks "find me hotels", "restaurants near me", "places to eat"
+   - User needs current business listings, ratings, addresses, phone numbers
+   - User asks for specific business names or locations
+   - Real-time search of businesses, hotels, restaurants, cafes
+   - Phase 3 (Hotel Planning) or Phase 4 (Restaurant Planning)
+   
+   ❌ DO NOT USE for:
+   - General destination information → Use retrieve_travel_info instead
+   - Questions about attractions from guides → Use retrieve_travel_info instead
+
+3. get_flight_prices (Flight search):
+   ✅ USE WHEN:
+   - User asks for flight prices, schedules
+   - User provides departure/arrival cities and dates
+   - Phase 2 (Flight Planning)
+
+EXAMPLES OF TOOL SELECTION:
+- User: "What are the top attractions in Zurich?" → retrieve_travel_info (searches uploaded guides)
+- User: "Find me hotels in Zurich" → search_places (real-time business search)
+- User: "What should I see in Switzerland?" → retrieve_travel_info (guide content)
+- User: "Show me restaurants near my hotel" → search_places (real-time search)
+- User: "Tell me about Swiss culture" → retrieve_travel_info (guide content)
+
 CRITICAL: NEVER assume or infer missing information. ALWAYS ask the user.
 NEVER assume departure cities, arrival cities, dates, or any travel details.
 If the user hasn't explicitly stated a departure city, you MUST ask "Where are you departing from?" before calling any flight tools.
 DO NOT use examples from prompts or tool descriptions as actual data - those are just formatting examples.
+
+DESTINATION VALIDATION - DETECT FICTIONAL PLACES:
+Before calling get_flight_prices, use your knowledge to detect if destinations are real places:
+- If a destination seems fictional (e.g., "Wizard Land", "Hogwarts", "Narnia"), ask the user to clarify
+- Example: User says "Wizard Land" → You ask "I'm not familiar with 'Wizard Land'. Could you clarify the destination name?"
+- The tool will also validate destinations, but catching obvious issues first improves user experience
 
 MANDATORY VALIDATION BEFORE CALLING get_flight_prices:
 Before calling get_flight_prices, you MUST verify: "Did the user explicitly state their departure city in this conversation?"
@@ -250,13 +516,22 @@ BEFORE CALLING get_flight_prices - MANDATORY VALIDATION:
 
 2. Arrival city: Did the user explicitly state their destination?
    → If NO: Ask "Where are you going?"
-   → If YES: Proceed
+   → If YES: Validate it's a real place (not fictional like "Wizard Land")
+   → If destination seems fictional or unclear: Ask "I'm not familiar with '[destination]'. Could you clarify the destination name?"
+   → If valid: Proceed
 
 3. Date: Did the user provide travel dates?
    → If NO: Ask "What are your travel dates?"
    → If YES: Proceed
 
-CRITICAL VALIDATION RULE: Before calling get_flight_prices, mentally check: "I have departure city, arrival city, and date - all explicitly stated by the user." If any piece is missing, ask for it first.
+DESTINATION VALIDATION - REAL PLACES ONLY:
+Before calling get_flight_prices, validate that destinations are real places:
+- Use your knowledge to detect obviously fictional places (e.g., "Wizard Land", "Hogwarts", "Narnia")
+- If a destination seems fictional or unclear, ask the user to clarify: "I'm not familiar with '[destination]'. Could you clarify the destination name?"
+- The tool will also validate destinations automatically, but you should catch obvious issues first
+- If the tool returns a validation error, ask the user to provide the correct destination name
+
+CRITICAL VALIDATION RULE: Before calling get_flight_prices, mentally check: "I have departure city, arrival city, and date - all explicitly stated by the user, and both destinations appear to be real places." If any piece is missing or unclear, ask for it first.
 
 BEFORE CALLING search_places:
 - MUST have location (destination city)
@@ -412,11 +687,10 @@ WORKFLOW TRANSITIONS:
     tools = create_tools() if use_tools else []
     
     if use_rag:
-        index_name = os.getenv("PINECONE_INDEX_NAME", "paradise-travel-index")
+        index_name = config.PINECONE_INDEX_NAME
         vector_store = create_vector_store(index_name)
-        retriever = get_retriever(vector_store, k=4)
         
-        rag_tool = create_rag_tool(retriever)
+        rag_tool = create_rag_tool(vector_store)
         if use_tools:
             tools = [rag_tool] + tools
         else:
@@ -443,6 +717,8 @@ WORKFLOW TRANSITIONS:
             
             return agent_executor
         else:
+            # Create retriever for ConversationalRetrievalChain
+            retriever = vector_store.as_retriever(search_kwargs={"k": 5})
             memory = ConversationBufferMemory(
                 memory_key="chat_history",
                 return_messages=True,
