@@ -4,58 +4,7 @@ import os
 import json
 import requests
 from typing import Dict, List, Optional
-
-CITY_TO_AIRPORT = {
-    "atlanta": "ATL",
-    "new york": "JFK",
-    "nyc": "JFK",
-    "new york city": "JFK",
-    "los angeles": "LAX",
-    "la": "LAX",
-    "chicago": "ORD",
-    "miami": "MIA",
-    "san francisco": "SFO",
-    "sf": "SFO",
-    "seattle": "SEA",
-    "boston": "BOS",
-    "washington": "DCA",
-    "dc": "DCA",
-    "houston": "IAH",
-    "dallas": "DFW",
-    "phoenix": "PHX",
-    "denver": "DEN",
-    "tokyo": "NRT",
-    "kyoto": "KIX",
-    "osaka": "KIX",
-    "japan": "NRT",
-    "sapporo": "CTS",
-    "fukuoka": "FUK",
-    "london": "LHR",
-    "paris": "CDG",
-    "rome": "FCO",
-    "madrid": "MAD",
-    "berlin": "BER",
-    "amsterdam": "AMS",
-    "barcelona": "BCN",
-    "munich": "MUC",
-    "vienna": "VIE",
-    "dublin": "DUB",
-    "singapore": "SIN",
-    "hong kong": "HKG",
-    "bangkok": "BKK",
-    "seoul": "ICN",
-    "beijing": "PEK",
-    "shanghai": "PVG",
-    "mumbai": "BOM",
-    "delhi": "DEL",
-    "dubai": "DXB",
-    "sydney": "SYD",
-    "melbourne": "MEL",
-    "toronto": "YYZ",
-    "vancouver": "YVR",
-    "mexico city": "MEX",
-    "sao paulo": "GRU",
-}
+from tools.airport_codes import CITY_TO_AIRPORT
 
 def get_airport_code(location: str) -> str:
     """
@@ -94,11 +43,18 @@ def get_flight_prices(
     """
     Get flight prices from SerpAPI Google Flights.
     
+    CRITICAL VALIDATION REQUIREMENT:
+    The departure parameter MUST be explicitly stated by the user in the conversation.
+    The agent calling this function MUST verify the user explicitly stated their departure city
+    before calling this function. If departure city is not explicitly stated, the agent MUST
+    ask the user "Where are you departing from?" first.
+    
     REQUIRED PARAMETERS: departure, arrival, and date must all be provided.
     SerpAPI requires outbound_date for all flight searches.
     
     Args:
-        departure: Departure city/airport code (e.g., "ATL", "Atlanta", "JFK")
+        departure: Departure city/airport code (e.g., "New York", "JFK", "ATL")
+                   MUST be explicitly stated by user - never inferred or assumed
         arrival: Arrival city/airport code (e.g., "NRT", "Tokyo", "Japan")
         date: Departure date in YYYY-MM-DD format (REQUIRED)
         return_date: Return date in YYYY-MM-DD format (optional, for round trips)
