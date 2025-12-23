@@ -1,10 +1,85 @@
 """Flight prices tool using SerpAPI."""
 
-import os
 import json
 import requests
 from typing import Dict, List, Optional
+import googlemaps
 from tools.airport_codes import CITY_TO_AIRPORT
+from config import config
+
+def validate_destination(location: str) -> Dict:
+    """
+    Validate if a location is a real place using Google Maps Geocoding API.
+    
+    Args:
+        location: Location name to validate (e.g., "Tokyo", "Wizard Land")
+        
+    Returns:
+        Dictionary with:
+        - 'valid': bool - Whether the location is a real place
+        - 'formatted_name': str - Canonical name of the location (if valid)
+        - 'error': str - Error message (if invalid)
+    """
+    api_key = config.GOOGLE_PLACES_API_KEY
+    if not api_key:
+        return {
+            "valid": True,
+            "formatted_name": location,
+            "error": None
+        }
+    
+    try:
+        gmaps = googlemaps.Client(key=api_key)
+        
+        geocode_result = gmaps.geocode(location)
+        
+        if not geocode_result or len(geocode_result) == 0:
+            return {
+                "valid": False,
+                "formatted_name": None,
+                "error": f"'{location}' does not appear to be a real location. Could you clarify or provide the correct destination name?"
+            }
+        
+        first_result = geocode_result[0]
+        location_types = first_result.get("types", [])
+        
+        valid_types = [
+            "locality", "administrative_area_level_1", "administrative_area_level_2",
+            "country", "airport", "establishment", "point_of_interest"
+        ]
+        
+        is_valid_type = any(t in location_types for t in valid_types)
+        
+        if not is_valid_type:
+            return {
+                "valid": False,
+                "formatted_name": None,
+                "error": f"'{location}' does not appear to be a valid travel destination. Could you clarify or provide the correct destination name?"
+            }
+        
+        formatted_name = first_result.get("formatted_address", location)
+        
+        address_components = first_result.get("address_components", [])
+        for component in address_components:
+            if "locality" in component.get("types", []):
+                formatted_name = component.get("long_name", formatted_name)
+                break
+            elif "country" in component.get("types", []):
+                formatted_name = component.get("long_name", formatted_name)
+        
+        return {
+            "valid": True,
+            "formatted_name": formatted_name,
+            "error": None
+        }
+        
+    except Exception as e:
+        return {
+            "valid": True,
+            "formatted_name": location,
+            "error": None
+        }
+
 
 def get_airport_code(location: str) -> str:
     """
@@ -43,18 +118,8 @@ def get_flight_prices(
     """
     Get flight prices from SerpAPI Google Flights.
     
-    CRITICAL VALIDATION REQUIREMENT:
-    The departure parameter MUST be explicitly stated by the user in the conversation.
-    The agent calling this function MUST verify the user explicitly stated their departure city
-    before calling this function. If departure city is not explicitly stated, the agent MUST
-    ask the user "Where are you departing from?" first.
-    
-    REQUIRED PARAMETERS: departure, arrival, and date must all be provided.
-    SerpAPI requires outbound_date for all flight searches.
-    
     Args:
         departure: Departure city/airport code (e.g., "New York", "JFK", "ATL")
-                   MUST be explicitly stated by user - never inferred or assumed
         arrival: Arrival city/airport code (e.g., "NRT", "Tokyo", "Japan")
         date: Departure date in YYYY-MM-DD format (REQUIRED)
         return_date: Return date in YYYY-MM-DD format (optional, for round trips)
@@ -64,7 +129,6 @@ def get_flight_prices(
     Returns:
         Dictionary with flight information including prices, durations, airlines
     """
-    
     if not date:
         error_result = {
             "error": "Date parameter is required. SerpAPI requires outbound_date for all flight searches.",
@@ -72,7 +136,7 @@ def get_flight_prices(
         }
         return error_result
     
-    api_key = os.getenv("SERPAPI_API_KEY")
+    api_key = config.SERPAPI_API_KEY
     if not api_key:
         error_result = {
             "error": "SERPAPI_API_KEY not configured",
@@ -80,8 +144,27 @@ def get_flight_prices(
         }
         return error_result
     
-    departure_code = get_airport_code(departure)
-    arrival_code = get_airport_code(arrival)
+    departure_validation = validate_destination(departure)
+    if not departure_validation["valid"]:
+        error_result = {
+            "error": departure_validation["error"],
+            "flights": []
+        }
+        return error_result
+    
+    arrival_validation = validate_destination(arrival)
+    if not arrival_validation["valid"]:
+        error_result = {
+            "error": arrival_validation["error"],
+            "flights": []
+        }
+        return error_result
+    
+    validated_departure = departure_validation["formatted_name"] or departure
+    validated_arrival = arrival_validation["formatted_name"] or arrival
+    
+    departure_code = get_airport_code(validated_departure)
+    arrival_code = get_airport_code(validated_arrival)
     
     if return_date:
         flight_type = "round-trip"
@@ -218,8 +301,8 @@ def get_flight_prices(
             summary["price_range"] = f"${min(prices):.0f} - ${max(prices):.0f}"
         
         result = {
-            "departure": departure,
-            "arrival": arrival,
+            "departure": validated_departure,
+            "arrival": validated_arrival,
             "date": date,
             "return_date": return_date,
             "flight_type": flight_type,
