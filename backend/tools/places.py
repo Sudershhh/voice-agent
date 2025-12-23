@@ -1,8 +1,8 @@
 """Places search tool using Google Places API."""
 
-import os
 from typing import Dict, List, Optional
 import googlemaps
+from config import config
 
 
 def search_places(
@@ -14,14 +14,6 @@ def search_places(
     """
     Search for places using Google Places API.
     
-    IMMEDIATELY call this tool when:
-    - User confirms a destination and asks about places to visit, eat, or stay
-    - User says "I want to find restaurants in Tokyo" → CALL NOW
-    - User confirms destination and asks for suggestions → CALL NOW
-    
-    DO NOT ask for confirmation if user has already mentioned the destination.
-    Extract location from conversation context.
-    
     Args:
         query: Search query (e.g., "cozy cafes", "restaurants", "hotels", "attractions")
         location: Location to search near (optional, extract from conversation if mentioned)
@@ -32,7 +24,7 @@ def search_places(
         Dictionary with place information including names, ratings, reviews, addresses
     """
     
-    api_key = os.getenv("GOOGLE_PLACES_API_KEY")
+    api_key = config.GOOGLE_PLACES_API_KEY
     if not api_key:
         error_result = {
             "error": "GOOGLE_PLACES_API_KEY not configured",
