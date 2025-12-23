@@ -1,15 +1,9 @@
 import React, { useEffect, useRef, useState } from "react";
-import { Room, RoomEvent, DataPacket_Kind } from "livekit-client";
-
-interface TranscriptMessage {
-  text: string;
-  is_user: boolean;
-  timestamp: number;
-  id: string;
-}
+import { RoomEvent, DataPacket_Kind } from "livekit-client";
+import { useRoomContext } from "@livekit/components-react";
+import type { TranscriptMessage } from "@/types/transcript";
 
 interface TranscriptProps {
-  room: Room | null;
   onMessagesChange?: (messages: TranscriptMessage[]) => void;
 }
 
@@ -27,7 +21,8 @@ const formatTime = (timestamp: number): string => {
   return date.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
 };
 
-export function Transcript({ room, onMessagesChange }: TranscriptProps) {
+export function Transcript({ onMessagesChange }: TranscriptProps) {
+  const room = useRoomContext();
   const [messages, setMessages] = useState<TranscriptMessage[]>([]);
   const messagesEndRef = useRef<HTMLDivElement>(null);
 

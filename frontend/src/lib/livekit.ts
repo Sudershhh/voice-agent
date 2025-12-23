@@ -1,137 +1,65 @@
-import { Room, RoomEvent, RemoteParticipant, LocalParticipant, Track, RemoteAudioTrack } from "livekit-client";
+import { TokenSource } from "livekit-client";
+import type { TokenSourceFetchOptions, TokenSourceResponseObject } from "livekit-client";
+import { getApiUrl, environmentConfiguration } from "./config";
 
-export interface LiveKitConfig {
-  url: string;
-  token: string;
-}
-
-export class LiveKitManager {
-  private room: Room | null = null;
-  private onConnectionChange?: (connected: boolean) => void;
-  private onTranscriptUpdate?: (transcript: string, isUser: boolean) => void;
-  private audioElements: Map<string, HTMLAudioElement> = new Map();
-
-  constructor() {
-    this.room = new Room();
-    this.setupEventListeners();
-  }
-
-  private setupEventListeners() {
-    if (!this.room) return;
-
-    this.room.on(RoomEvent.Connected, () => {
-      this.onConnectionChange?.(true);
-    });
-
-    this.room.on(RoomEvent.Disconnected, () => {
-      this.onConnectionChange?.(false);
-    });
-
-    this.room.on(RoomEvent.ParticipantConnected, (participant: RemoteParticipant) => {
-    });
-
-    this.room.on(RoomEvent.ParticipantDisconnected, (participant: RemoteParticipant) => {
-    });
-
-    this.room.on(RoomEvent.TrackSubscribed, (track, publication, participant) => {
-      if (track.kind === Track.Kind.Audio && participant !== this.room.localParticipant) {
-        const remoteAudioTrack = track as RemoteAudioTrack;
-        const audioElement = remoteAudioTrack.attach() as HTMLAudioElement;
-        audioElement.autoplay = true;
-        
-        const trackId = `${participant.identity}-${track.sid}`;
-        this.audioElements.set(trackId, audioElement);
-        
-        audioElement.play().catch((err) => {
-        });
-      } else if (track.kind === Track.Kind.Video) {
+/**
+ * Creates a token source for use with LiveKit's useSession hook.
+ * Uses TokenSource.custom() to create a proper token source that fetches from our backend API.
+ * 
+ * The custom function accepts TokenSourceFetchOptions and returns TokenSourceResponseObject
+ * with participantToken and url fields.
+ */
+export function createTokenSource() {
+  return TokenSource.custom(async (options?: TokenSourceFetchOptions): Promise<TokenSourceResponseObject> => {
+    const response = await fetch(
+      getApiUrl(environmentConfiguration.endpoints.token),
+      {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({
+          identity: options?.participantIdentity || `user-${Date.now()}`,
+          name: options?.participantName || "User",
+          room: options?.roomName || "paradise-room",
+        }),
       }
-    });
+    );
 
-    this.room.on(RoomEvent.TrackUnsubscribed, (track, publication, participant) => {
-      if (!this.room) {
-        return;
-      }
-      
-      try {
-        if (track.kind === Track.Kind.Audio && participant !== this.room.localParticipant) {
-          const trackId = `${participant.identity}-${track.sid}`;
-          const audioElement = this.audioElements.get(trackId);
-          if (audioElement) {
-            track.detach(audioElement);
-            this.audioElements.delete(trackId);
-          }
-        }
-      } catch (error) {
-      }
-    });
-  }
-
-  async connect(config: LiveKitConfig): Promise<void> {
-    if (!this.room) {
-      this.room = new Room();
-      this.setupEventListeners();
+    if (!response.ok) {
+      const error = await response.json();
+      throw new Error(error.detail || "Failed to get LiveKit token");
     }
 
-    try {
-      await this.room.connect(config.url, config.token);
-      
-      try {
-        await this.room.localParticipant.enableCameraAndMicrophone(false, true);
-      } catch (error: any) {
-        if (error.name === 'NotFoundError' || error.message?.includes('device not found')) {
-        } else {
-        }
-      }
-    } catch (error) {
-      throw error;
+    const data = await response.json();
+    
+    // Validate response fields exist
+    if (!data.token || typeof data.token !== 'string') {
+      throw new Error(
+        'Invalid response: Token is missing or invalid. Check backend token generation.'
+      );
     }
-  }
 
-  async disconnect(): Promise<void> {
-    if (!this.room) {
-      return;
+    if (!data.url || typeof data.url !== 'string') {
+      throw new Error(
+        'Invalid response: URL is missing or invalid. Check backend LIVEKIT_URL configuration in .env file.'
+      );
+    }
+
+    // Validate URL format - LiveKit requires wss:// or ws:// protocol
+    if (!data.url.startsWith('wss://') && !data.url.startsWith('ws://')) {
+      throw new Error(
+        `Invalid URL format: "${data.url}". LiveKit URL must start with wss:// or ws://. ` +
+        `Check your backend .env file - LIVEKIT_URL should be in format: wss://your-project.livekit.cloud`
+      );
     }
     
-    try {
-      this.audioElements.forEach((audioElement, trackId) => {
-        try {
-          audioElement.pause();
-          audioElement.src = "";
-        } catch (error) {
-        }
-      });
-      this.audioElements.clear();
-      
-      if (this.room.localParticipant) {
-        try {
-          await this.room.localParticipant.setCameraEnabled(false);
-          await this.room.localParticipant.setMicrophoneEnabled(false);
-        } catch (error) {
-        }
-      }
-      
-      this.room.disconnect();
-    } catch (error) {
-    } finally {
-      this.room = null;
-    }
-  }
-
-  isConnected(): boolean {
-    return this.room?.state === "connected";
-  }
-
-  getRoom(): Room | null {
-    return this.room;
-  }
-
-  setOnConnectionChange(callback: (connected: boolean) => void) {
-    this.onConnectionChange = callback;
-  }
-
-  setOnTranscriptUpdate(callback: (transcript: string, isUser: boolean) => void) {
-    this.onTranscriptUpdate = callback;
-  }
+    // Map backend response { token, url, room } to LiveKit's expected format
+    // TokenSourceResponseObject expects participantToken and serverUrl (not url!)
+    return {
+      participantToken: data.token,
+      serverUrl: data.url,  // LiveKit expects 'serverUrl', not 'url'
+    };
+  });
 }
 

@@ -1,11 +1,5 @@
 import React from "react";
-
-interface TranscriptMessage {
-  text: string;
-  is_user: boolean;
-  timestamp: number;
-  id: string;
-}
+import type { TranscriptMessage } from "@/types/transcript";
 
 interface FullTranscriptProps {
   messages: TranscriptMessage[];
