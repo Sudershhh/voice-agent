@@ -1,6 +1,7 @@
 """LangChain agent setup for Paradise voice agent."""
 
 import json
+from typing import Optional
 from langchain_openai import ChatOpenAI
 from config import config
 from langchain.prompts import ChatPromptTemplate, MessagesPlaceholder
@@ -80,7 +81,7 @@ def create_rag_tool(vector_store):
         vector_store: Pinecone vector store instance
     """
     @tool
-    def retrieve_travel_info(query: str, destination: str = None, section: str = None) -> str:
+    def retrieve_travel_info(query: str, destination: Optional[str] = None, section: Optional[str] = None) -> str:
         """Retrieve detailed travel information from UPLOADED PDF DOCUMENTS and travel guides stored in the knowledge base.
         
         ⚠️ CRITICAL: This tool ONLY searches UPLOADED DOCUMENTS/PDFs that have been uploaded to the system. 
@@ -338,7 +339,14 @@ def create_tools():
         - arrival: Arrival city/airport code (REQUIRED - ask user if not provided)
         - date: Departure date in YYYY-MM-DD format (REQUIRED - ask user if not provided)
         
-        DESTINATION VALIDATION:
+        DESTINATION VALIDATION - COUNTRY VS CITY:
+        - This tool REQUIRES SPECIFIC CITIES, NOT COUNTRIES for both departure and arrival
+        - If user provides a country (e.g., "Japan", "France", "Italy"), the tool will return an error asking for a city
+        - When you receive a country error, ask: "Which city in [country] would you like to fly to? For example: [city examples]"
+        - Examples: "Japan" → Ask for "Tokyo, Osaka, or Kyoto" | "France" → Ask for "Paris, Lyon, or Nice"
+        - NEVER proceed with flight search when user only provides a country name - ALWAYS ask for city clarification first
+        
+        DESTINATION VALIDATION - GENERAL:
         - This tool automatically validates that both departure and arrival destinations are real places
         - If a destination is fictional or unclear (e.g., "Wizard Land"), the tool will return an error
         - When you receive a validation error, ask the user to clarify or provide the correct destination name
@@ -476,6 +484,23 @@ NEVER assume departure cities, arrival cities, dates, or any travel details.
 If the user hasn't explicitly stated a departure city, you MUST ask "Where are you departing from?" before calling any flight tools.
 DO NOT use examples from prompts or tool descriptions as actual data - those are just formatting examples.
 
+DESTINATION VALIDATION - COUNTRY VS CITY (CRITICAL):
+Flight searches REQUIRE SPECIFIC CITIES, NOT COUNTRIES. You MUST detect and handle countries differently:
+- If user says a country name (e.g., "Japan", "France", "Italy", "Spain", "Germany", "United Kingdom", "Switzerland"):
+  → DO NOT call get_flight_prices yet
+  → IMMEDIATELY ask: "Which city in [country] would you like to fly to? For example: [provide 2-3 city examples]"
+  → Wait for user to specify a city before calling the tool
+- Common country-to-city examples:
+  - "Japan" → Ask for "Tokyo, Osaka, or Kyoto"
+  - "France" → Ask for "Paris, Lyon, or Nice"
+  - "Italy" → Ask for "Rome, Milan, or Venice"
+  - "Spain" → Ask for "Madrid, Barcelona, or Seville"
+  - "Germany" → Ask for "Berlin, Munich, or Frankfurt"
+  - "United Kingdom" or "UK" → Ask for "London, Edinburgh, or Manchester"
+  - "Switzerland" → Ask for "Zurich, Geneva, or Bern"
+- The tool will also detect countries and return an error, but asking first provides better user experience
+- NEVER proceed with flight search when user only provides a country - ALWAYS ask for city clarification first
+
 DESTINATION VALIDATION - DETECT FICTIONAL PLACES:
 Before calling get_flight_prices, use your knowledge to detect if destinations are real places:
 - If a destination seems fictional (e.g., "Wizard Land", "Hogwarts", "Narnia"), ask the user to clarify
@@ -516,9 +541,11 @@ BEFORE CALLING get_flight_prices - MANDATORY VALIDATION:
 
 2. Arrival city: Did the user explicitly state their destination?
    → If NO: Ask "Where are you going?"
-   → If YES: Validate it's a real place (not fictional like "Wizard Land")
-   → If destination seems fictional or unclear: Ask "I'm not familiar with '[destination]'. Could you clarify the destination name?"
-   → If valid: Proceed
+   → If YES: Check if it's a COUNTRY (not a city):
+     → If COUNTRY (e.g., "Japan", "France", "Italy"): Ask "Which city in [country] would you like to fly to? For example: [city examples]"
+     → If CITY: Validate it's a real place (not fictional like "Wizard Land")
+     → If destination seems fictional or unclear: Ask "I'm not familiar with '[destination]'. Could you clarify the destination name?"
+   → Only proceed with tool call when you have a SPECIFIC CITY, not a country
 
 3. Date: Did the user provide travel dates?
    → If NO: Ask "What are your travel dates?"
@@ -531,7 +558,7 @@ Before calling get_flight_prices, validate that destinations are real places:
 - The tool will also validate destinations automatically, but you should catch obvious issues first
 - If the tool returns a validation error, ask the user to provide the correct destination name
 
-CRITICAL VALIDATION RULE: Before calling get_flight_prices, mentally check: "I have departure city, arrival city, and date - all explicitly stated by the user, and both destinations appear to be real places." If any piece is missing or unclear, ask for it first.
+CRITICAL VALIDATION RULE: Before calling get_flight_prices, mentally check: "I have departure CITY (not country), arrival CITY (not country), and date - all explicitly stated by the user, and both destinations are specific cities (not countries) and appear to be real places." If any piece is missing, unclear, or is a country instead of a city, ask for it first.
 
 BEFORE CALLING search_places:
 - MUST have location (destination city)

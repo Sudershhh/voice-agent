@@ -3,6 +3,7 @@
 import asyncio
 import json
 import logging
+import signal
 import time
 from livekit import rtc
 from livekit.agents import (
@@ -270,13 +271,17 @@ async def entrypoint(ctx: JobContext):
                         frame_count += 1
                         if hasattr(output.audio, 'frame'):
                             await agent_audio_source.capture_frame(output.audio.frame)
-                except rtc.RtcError as rtc_error:
-                    error_msg = str(rtc_error)
-                    if "InvalidState" in error_msg or "invalid state" in error_msg.lower():
+                except Exception as capture_error:
+                    error_msg = str(capture_error)
+                    error_type = type(capture_error).__name__
+                    
+                    # Check if this is an RTC-related error (InvalidState, connection issues, etc.)
+                    if "InvalidState" in error_msg or "invalid state" in error_msg.lower() or "RtcError" in error_msg:
                         logger.warning(
-                            "Audio: Capture failed (InvalidState)",
+                            "Audio: Capture failed (InvalidState or RTC error)",
                             extra={
-                                "error": str(rtc_error),
+                                "error": error_msg,
+                                "error_type": error_type,
                                 "room_state": str(ctx.room.connection_state),
                                 "frames_sent": frame_count,
                             }
@@ -284,24 +289,15 @@ async def entrypoint(ctx: JobContext):
                         break
                     else:
                         logger.error(
-                            "Audio: RTC error during capture",
+                            "Audio: Error during frame capture",
                             extra={
-                                "error": str(rtc_error),
-                                "error_type": type(rtc_error).__name__,
+                                "error": error_msg,
+                                "error_type": error_type,
                                 "frames_sent": frame_count,
                             }
                         )
-                        raise
-                except Exception as frame_error:
-                    logger.warning(
-                        "Audio: Frame capture error",
-                        extra={
-                            "error": str(frame_error),
-                            "error_type": type(frame_error).__name__,
-                            "frames_sent": frame_count,
-                        }
-                    )
-                    continue
+                        # Don't raise - continue processing to avoid breaking the entire flow
+                        break
         except Exception as e:
             error_msg = str(e)
             if "429" in error_msg or "quota" in error_msg.lower() or "insufficient_quota" in error_msg.lower():
@@ -338,52 +334,168 @@ async def entrypoint(ctx: JobContext):
     await speak_text(greeting)
     
     cleanup_done = False
+    shutdown_event = asyncio.Event()
+    running_tasks = []
     
     async def cleanup_resources():
-        """Clean up STT and TTS resources gracefully."""
+        """Clean up all resources gracefully (STT, TTS, audio tracks, etc.)."""
         nonlocal cleanup_done
         if cleanup_done:
             return
         cleanup_done = True
         
+        logger.info("Starting graceful cleanup of resources...")
+        
+        # Clean up STT engine
         try:
-            if 'stt_engine' in locals() and stt_engine:
+            if 'stt_engine' in locals() and stt_engine is not None:
                 try:
+                    logger.debug("Closing STT engine...")
                     if hasattr(stt_engine, 'end_input'):
                         stt_engine.end_input()
                     if hasattr(stt_engine, 'aclose'):
-                        await stt_engine.aclose()
+                        await asyncio.wait_for(stt_engine.aclose(), timeout=5.0)
+                    logger.debug("STT engine closed successfully")
+                except asyncio.TimeoutError:
+                    logger.warning("STT engine close timed out")
                 except Exception as e:
-                    pass
+                    logger.warning(f"Error closing STT engine: {e}")
         except Exception as e:
-            pass
+            logger.warning(f"Error during STT cleanup: {e}")
+        
+        # Clean up TTS engine (usually doesn't need explicit cleanup, but log it)
+        try:
+            if 'tts_engine' in locals() and tts_engine is not None:
+                logger.debug("TTS engine cleanup (no explicit close needed)")
+        except Exception as e:
+            logger.warning(f"Error during TTS cleanup: {e}")
+        
+        # Clean up audio track and source
+        try:
+            if 'agent_audio_track' in locals() and agent_audio_track is not None:
+                try:
+                    logger.debug("Stopping audio track...")
+                    # Audio tracks are automatically cleaned up when room disconnects
+                    # But we can stop publishing if needed
+                    if hasattr(agent_audio_track, 'stop'):
+                        agent_audio_track.stop()
+                except Exception as e:
+                    logger.warning(f"Error stopping audio track: {e}")
+        except Exception as e:
+            logger.warning(f"Error during audio track cleanup: {e}")
+        
+        # Clean up audio source
+        try:
+            if 'agent_audio_source' in locals() and agent_audio_source is not None:
+                logger.debug("Audio source cleanup (handled by LiveKit)")
+        except Exception as e:
+            logger.warning(f"Error during audio source cleanup: {e}")
+        
+        # Clear announcement queue
+        try:
+            if 'announcement_queue' in locals() and announcement_queue is not None:
+                # Clear any pending announcements
+                while not announcement_queue.empty():
+                    try:
+                        announcement_queue.get_nowait()
+                    except asyncio.QueueEmpty:
+                        break
+                logger.debug("Announcement queue cleared")
+        except Exception as e:
+            logger.warning(f"Error clearing announcement queue: {e}")
+        
+        logger.info("Resource cleanup completed")
+    
+    def signal_handler(signum, frame):
+        """Handle shutdown signals (SIGINT, SIGTERM)."""
+        logger.info(f"Received signal {signum}, initiating graceful shutdown...")
+        shutdown_event.set()
+    
+    # Set up signal handlers for graceful shutdown
+    try:
+        signal.signal(signal.SIGINT, signal_handler)
+        if hasattr(signal, 'SIGTERM'):
+            signal.signal(signal.SIGTERM, signal_handler)
+    except (ValueError, OSError) as e:
+        # Signal handlers can only be set from main thread
+        # On Windows, some signals may not be available
+        logger.debug(f"Could not set signal handlers: {e}")
+    
+    async def wait_for_disconnect():
+        """Wait for room disconnection or shutdown signal."""
+        try:
+            disconnected_state = 0
+            while int(ctx.room.connection_state) != disconnected_state and not shutdown_event.is_set():
+                # Check for shutdown signal every 0.5 seconds
+                try:
+                    await asyncio.wait_for(asyncio.sleep(0.5), timeout=0.5)
+                except asyncio.TimeoutError:
+                    pass
+                
+                if shutdown_event.is_set():
+                    logger.info("Shutdown signal received, disconnecting...")
+                    break
+        except Exception as e:
+            logger.warning(f"Error in wait_for_disconnect: {e}")
+        finally:
+            await cleanup_resources()
+            try:
+                if hasattr(ctx, 'shutdown') and ctx.shutdown is not None:
+                    shutdown_reason = "Graceful shutdown" if shutdown_event.is_set() else "User ended call"
+                    shutdown_result = ctx.shutdown(reason=shutdown_reason)
+                    if shutdown_result and hasattr(shutdown_result, '__await__'):
+                        await shutdown_result
+            except Exception as e:
+                logger.warning(f"Error during ctx.shutdown: {e}")
     
     try:
-        async def wait_for_disconnect():
-            try:
-                disconnected_state = 0
-                while int(ctx.room.connection_state) != disconnected_state:
-                    await asyncio.sleep(0.5)
-            except Exception as e:
-                pass
-            finally:
-                await cleanup_resources()
-                try:
-                    await ctx.shutdown(reason="User ended call")
-                except Exception as e:
-                    pass
+        # Create tasks for all async operations
+        transcribe_task = asyncio.create_task(transcribe_audio())
+        handle_task = asyncio.create_task(handle_transcription())
+        announcements_task = asyncio.create_task(process_announcements())
+        disconnect_task = asyncio.create_task(wait_for_disconnect())
         
-        await asyncio.gather(
-            transcribe_audio(),
-            handle_transcription(),
-            process_announcements(),
-            wait_for_disconnect(),
+        running_tasks = [transcribe_task, handle_task, announcements_task, disconnect_task]
+        
+        # Wait for any task to complete or shutdown signal
+        done, pending = await asyncio.wait(
+            running_tasks,
+            return_when=asyncio.FIRST_COMPLETED
         )
+        
+        # If shutdown signal is set, cancel all tasks
+        if shutdown_event.is_set():
+            logger.info("Cancelling all running tasks...")
+            for task in running_tasks:
+                if not task.done():
+                    task.cancel()
+            
+            # Wait for tasks to be cancelled
+            if pending:
+                await asyncio.gather(*pending, return_exceptions=True)
+        
     except asyncio.CancelledError:
+        logger.info("Tasks cancelled, cleaning up...")
         await cleanup_resources()
+    except KeyboardInterrupt:
+        logger.info("KeyboardInterrupt received, cleaning up...")
+        shutdown_event.set()
+        await cleanup_resources()
+        try:
+            if hasattr(ctx, 'shutdown') and ctx.shutdown is not None:
+                shutdown_result = ctx.shutdown(reason="Keyboard interrupt")
+                if shutdown_result and hasattr(shutdown_result, '__await__'):
+                    await shutdown_result
+        except Exception as e:
+            logger.warning(f"Error during ctx.shutdown: {e}")
     except Exception as e:
         import traceback
+        logger.error(f"Unexpected error: {e}", exc_info=True)
         traceback.print_exc()
         await cleanup_resources()
     finally:
-        pass
+        # Ensure all tasks are cancelled and cleaned up
+        for task in running_tasks:
+            if not task.done():
+                task.cancel()
+        await cleanup_resources()

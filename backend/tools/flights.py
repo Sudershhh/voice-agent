@@ -1,23 +1,40 @@
 """Flight prices tool using SerpAPI."""
 
 import json
+import logging
 import requests
 from typing import Dict, List, Optional
 import googlemaps
+from googlemaps.exceptions import ApiError as GoogleMapsApiError
 from tools.airport_codes import CITY_TO_AIRPORT
 from config import config
+
+logger = logging.getLogger(__name__)
+
+# Fallback list of known countries for when Geocoding API is unavailable
+KNOWN_COUNTRIES = {
+    "japan", "france", "italy", "spain", "germany", "united kingdom", "uk", "england",
+    "switzerland", "austria", "belgium", "netherlands", "portugal", "greece", "china",
+    "australia", "new zealand", "canada", "mexico", "brazil", "argentina", "chile",
+    "india", "indonesia", "thailand", "vietnam", "singapore", "malaysia", "philippines",
+    "south korea", "taiwan", "hong kong", "south africa", "egypt", "morocco", "turkey",
+    "russia", "poland", "czech republic", "hungary", "romania", "croatia", "norway",
+    "sweden", "denmark", "finland", "iceland", "ireland", "scotland", "wales"
+}
 
 def validate_destination(location: str) -> Dict:
     """
     Validate if a location is a real place using Google Maps Geocoding API.
+    Detects whether the location is a country or a city.
     
     Args:
-        location: Location name to validate (e.g., "Tokyo", "Wizard Land")
+        location: Location name to validate (e.g., "Tokyo", "Japan", "Wizard Land")
         
     Returns:
         Dictionary with:
         - 'valid': bool - Whether the location is a real place
         - 'formatted_name': str - Canonical name of the location (if valid)
+        - 'is_country': bool - Whether the location is a country (not a city)
         - 'error': str - Error message (if invalid)
     """
     api_key = config.GOOGLE_PLACES_API_KEY
@@ -25,6 +42,7 @@ def validate_destination(location: str) -> Dict:
         return {
             "valid": True,
             "formatted_name": location,
+            "is_country": False,
             "error": None
         }
     
@@ -34,14 +52,41 @@ def validate_destination(location: str) -> Dict:
         geocode_result = gmaps.geocode(location)
         
         if not geocode_result or len(geocode_result) == 0:
+            logger.warning(f"Geocoding failed for location: {location} - no results returned")
             return {
                 "valid": False,
                 "formatted_name": None,
+                "is_country": False,
                 "error": f"'{location}' does not appear to be a real location. Could you clarify or provide the correct destination name?"
             }
         
         first_result = geocode_result[0]
         location_types = first_result.get("types", [])
+        
+        # Log the types returned by Google Maps API for debugging
+        logger.debug(f"Geocoding result for '{location}': types={location_types}, formatted_address={first_result.get('formatted_address', 'N/A')}")
+        
+        # Improved country detection: prioritize "country" type when present
+        # A location is a country if:
+        # 1. "country" is in types, AND
+        # 2. Either it's the first/primary type OR there are no locality-level types
+        has_country_type = "country" in location_types
+        has_locality_types = any(
+            t in location_types for t in ["locality", "administrative_area_level_1", 
+                                         "administrative_area_level_2", "administrative_area_level_3"]
+        )
+        
+        # Check if country is the primary type (first in types list or only type)
+        country_is_primary = has_country_type and (
+            len(location_types) == 1 or 
+            location_types[0] == "country" or
+            not has_locality_types
+        )
+        
+        is_country = country_is_primary
+        
+        if is_country:
+            logger.info(f"Detected country: {location} (types: {location_types})")
         
         valid_types = [
             "locality", "administrative_area_level_1", "administrative_area_level_2",
@@ -51,9 +96,11 @@ def validate_destination(location: str) -> Dict:
         is_valid_type = any(t in location_types for t in valid_types)
         
         if not is_valid_type:
+            logger.warning(f"Invalid location type for '{location}': types={location_types}")
             return {
                 "valid": False,
                 "formatted_name": None,
+                "is_country": False,
                 "error": f"'{location}' does not appear to be a valid travel destination. Could you clarify or provide the correct destination name?"
             }
         
@@ -65,18 +112,48 @@ def validate_destination(location: str) -> Dict:
                 formatted_name = component.get("long_name", formatted_name)
                 break
             elif "country" in component.get("types", []):
-                formatted_name = component.get("long_name", formatted_name)
+                # Only use country name if we've determined it's a country
+                if is_country:
+                    formatted_name = component.get("long_name", formatted_name)
         
         return {
             "valid": True,
             "formatted_name": formatted_name,
+            "is_country": is_country,
             "error": None
         }
         
-    except Exception as e:
+    except GoogleMapsApiError as api_error:
+        error_status = getattr(api_error, 'status', 'UNKNOWN')
+        logger.warning(f"Google Maps API error for '{location}': {error_status} - {str(api_error)}")
+        
+        # Use fallback country detection when API fails
+        location_lower = location.lower().strip()
+        is_country_fallback = location_lower in KNOWN_COUNTRIES
+        
+        if is_country_fallback:
+            logger.info(f"Detected country via fallback list: {location}")
+        
+        # If it's a known country, return as country; otherwise assume it's a city
         return {
             "valid": True,
             "formatted_name": location,
+            "is_country": is_country_fallback,
+            "error": None
+        }
+    except Exception as e:
+        logger.error(f"Unexpected exception during geocoding for '{location}': {str(e)}", exc_info=True)
+        # Use fallback country detection
+        location_lower = location.lower().strip()
+        is_country_fallback = location_lower in KNOWN_COUNTRIES
+        
+        if is_country_fallback:
+            logger.info(f"Detected country via fallback list: {location}")
+        
+        return {
+            "valid": True,
+            "formatted_name": location,
+            "is_country": is_country_fallback,
             "error": None
         }
 
@@ -156,6 +233,54 @@ def get_flight_prices(
     if not arrival_validation["valid"]:
         error_result = {
             "error": arrival_validation["error"],
+            "flights": []
+        }
+        return error_result
+    
+    # Check if departure destination is a country (not a city)
+    if departure_validation.get("is_country", False):
+        country_name = departure_validation.get("formatted_name", departure)
+        # Provide helpful examples based on common countries
+        examples = {
+            "japan": "Tokyo, Osaka, or Kyoto",
+            "france": "Paris, Lyon, or Nice",
+            "italy": "Rome, Milan, or Venice",
+            "spain": "Madrid, Barcelona, or Seville",
+            "germany": "Berlin, Munich, or Frankfurt",
+            "united kingdom": "London, Edinburgh, or Manchester",
+            "switzerland": "Zurich, Geneva, or Bern",
+            "china": "Beijing, Shanghai, or Guangzhou",
+            "australia": "Sydney, Melbourne, or Brisbane",
+        }
+        country_lower = country_name.lower()
+        example_cities = examples.get(country_lower, "a major city")
+        
+        error_result = {
+            "error": f"{country_name} is a country. Which city in {country_name} are you departing from? For example: {example_cities}.",
+            "flights": []
+        }
+        return error_result
+    
+    # Check if arrival destination is a country (not a city)
+    if arrival_validation.get("is_country", False):
+        country_name = arrival_validation.get("formatted_name", arrival)
+        # Provide helpful examples based on common countries
+        examples = {
+            "japan": "Tokyo, Osaka, or Kyoto",
+            "france": "Paris, Lyon, or Nice",
+            "italy": "Rome, Milan, or Venice",
+            "spain": "Madrid, Barcelona, or Seville",
+            "germany": "Berlin, Munich, or Frankfurt",
+            "united kingdom": "London, Edinburgh, or Manchester",
+            "switzerland": "Zurich, Geneva, or Bern",
+            "china": "Beijing, Shanghai, or Guangzhou",
+            "australia": "Sydney, Melbourne, or Brisbane",
+        }
+        country_lower = country_name.lower()
+        example_cities = examples.get(country_lower, "a major city")
+        
+        error_result = {
+            "error": f"{country_name} is a country. Which city in {country_name} would you like to fly to? For example: {example_cities}.",
             "flights": []
         }
         return error_result

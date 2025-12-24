@@ -71,7 +71,7 @@ CITY_TO_AIRPORT = {
     "tokyo haneda": "HND",
     "kyoto": "KIX",
     "osaka": "KIX",
-    "japan": "NRT",
+    # Note: "japan" country mapping removed - users must specify a city
     "sapporo": "CTS",
     "fukuoka": "FUK",
     "nagoya": "NGO",
@@ -88,7 +88,7 @@ CITY_TO_AIRPORT = {
     "hong kong": "HKG",
     "macau": "MFM",
     "taipei": "TPE",
-    "taiwan": "TPE",
+    # Note: "taiwan" country mapping removed - users must specify a city
     
     # South Korea
     "seoul": "ICN",
