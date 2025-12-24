@@ -7,7 +7,11 @@ interface FullTranscriptProps {
 
 const formatTime = (timestamp: number): string => {
   const date = new Date(timestamp);
-  return date.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", second: "2-digit" });
+  return date.toLocaleTimeString([], {
+    hour: "2-digit",
+    minute: "2-digit",
+    second: "2-digit",
+  });
 };
 
 const formatFullDateTime = (timestamp: number): string => {
@@ -56,7 +60,9 @@ export function FullTranscript({ messages }: FullTranscriptProps) {
     const url = URL.createObjectURL(blob);
     const a = document.createElement("a");
     a.href = url;
-    a.download = `paradise-transcript-${new Date().toISOString().split("T")[0]}.txt`;
+    a.download = `paradise-transcript-${
+      new Date().toISOString().split("T")[0]
+    }.txt`;
     document.body.appendChild(a);
     a.click();
     document.body.removeChild(a);
@@ -64,26 +70,33 @@ export function FullTranscript({ messages }: FullTranscriptProps) {
   };
 
   return (
-    <div className="space-y-4">
-      <div className="flex justify-between items-center">
-        <h3 className="text-lg font-semibold">Full Transcript</h3>
+    <div className="flex flex-col h-full space-y-6">
+      <div className="flex justify-between items-center shrink-0 pb-4 border-b border-border">
+        <div>
+          <h3 className="text-xl font-bold text-foreground mb-1">
+            Full Transcript
+          </h3>
+          <p className="text-xs text-muted-foreground">
+            Complete conversation history with Paradise
+          </p>
+        </div>
         <div className="flex gap-2">
           <button
             onClick={copyToClipboard}
-            className="px-3 py-1.5 text-sm bg-secondary text-secondary-foreground rounded-md hover:bg-secondary/80 transition-colors"
+            className="px-4 py-2 text-sm font-medium bg-secondary text-secondary-foreground rounded-md hover:bg-secondary/80 transition-colors shadow-sm"
           >
             Copy
           </button>
           <button
             onClick={exportAsText}
-            className="px-3 py-1.5 text-sm bg-secondary text-secondary-foreground rounded-md hover:bg-secondary/80 transition-colors"
+            className="px-4 py-2 text-sm font-medium bg-secondary text-secondary-foreground rounded-md hover:bg-secondary/80 transition-colors shadow-sm"
           >
             Export
           </button>
         </div>
       </div>
 
-      <div className="bg-muted/50 rounded-lg p-4 max-h-[600px] overflow-y-auto">
+      <div className="bg-muted/50 rounded-lg border border-border p-4 flex-1 min-h-0 overflow-y-auto custom-scrollbar">
         <div className="space-y-4">
           {messages.map((msg, idx) => {
             const isNewDay =
@@ -114,10 +127,12 @@ export function FullTranscript({ messages }: FullTranscriptProps) {
                   </div>
                 )}
                 <div
-                  className={`flex ${msg.is_user ? "justify-end" : "justify-start"}`}
+                  className={`flex ${
+                    msg.is_user ? "justify-end" : "justify-start"
+                  }`}
                 >
                   <div
-                    className={`max-w-[85%] rounded-lg px-4 py-2.5 ${
+                    className={`transcript-message max-w-[85%] rounded-lg px-4 py-2.5 shadow-sm transition-all ${
                       msg.is_user
                         ? "bg-primary text-primary-foreground"
                         : "bg-background border border-border text-foreground"
@@ -144,4 +159,3 @@ export function FullTranscript({ messages }: FullTranscriptProps) {
     </div>
   );
 }
-

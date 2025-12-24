@@ -41,13 +41,13 @@ export function ToolResults({ flights, places }: ToolResultsProps) {
   return (
     <div className="space-y-4">
       {flights && flights.flights.length > 0 && (
-        <div className="bg-card rounded-lg border p-4">
+        <div className="bg-card rounded-lg border border-border shadow-sm p-4">
           <h3 className="font-semibold mb-2">
             Flights: {flights.departure} → {flights.arrival}
           </h3>
           <div className="space-y-2">
             {flights.flights.map((flight, idx) => (
-              <div key={idx} className="border rounded p-3">
+              <div key={idx} className="border border-border rounded-lg p-3 bg-muted/30">
                 <div className="flex justify-between items-start">
                   <div>
                     <div className="font-medium">{flight.airline}</div>
@@ -67,11 +67,11 @@ export function ToolResults({ flights, places }: ToolResultsProps) {
       )}
 
       {places && places.places.length > 0 && (
-        <div className="bg-card rounded-lg border p-4">
+        <div className="bg-card rounded-lg border border-border shadow-sm p-4">
           <h3 className="font-semibold mb-2">Places: {places.query}</h3>
           <div className="space-y-3">
             {places.places.map((place, idx) => (
-              <div key={idx} className="border rounded p-3">
+              <div key={idx} className="border border-border rounded-lg p-3 bg-muted/30">
                 <div className="font-medium">{place.name}</div>
                 <div className="text-sm text-muted-foreground">{place.address}</div>
                 <div className="flex items-center gap-2 mt-1">

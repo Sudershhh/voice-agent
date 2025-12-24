@@ -2,6 +2,7 @@ import React, { useEffect, useRef, useState } from "react";
 import { RoomEvent, DataPacket_Kind } from "livekit-client";
 import { useRoomContext } from "@livekit/components-react";
 import type { TranscriptMessage } from "@/types/transcript";
+import { motion, AnimatePresence } from "framer-motion";
 
 interface TranscriptProps {
   onMessagesChange?: (messages: TranscriptMessage[]) => void;
@@ -70,39 +71,68 @@ export function Transcript({ onMessagesChange }: TranscriptProps) {
 
   if (messages.length === 0) {
     return (
-      <div className="text-center text-muted-foreground py-8">
-        <p>Start speaking to see your transcript here...</p>
-      </div>
+      <motion.div
+        initial={{ opacity: 0 }}
+        animate={{ opacity: 1 }}
+        className="text-center text-muted-foreground py-8 h-full flex items-center justify-center"
+      >
+        <div className="space-y-2">
+          <p className="text-sm">Start speaking to see your transcript here...</p>
+          <p className="text-xs opacity-70">Messages will appear in real-time</p>
+        </div>
+      </motion.div>
     );
   }
 
   return (
-    <div className="space-y-3 max-h-96 overflow-y-auto pr-2">
-      {messages.map((msg) => (
-        <div
-          key={msg.id}
-          className={`flex ${msg.is_user ? "justify-end" : "justify-start"} animate-in fade-in slide-in-from-bottom-2 duration-300`}
-        >
-          <div
-            className={`max-w-[80%] rounded-lg px-4 py-2.5 shadow-sm transition-all ${
-              msg.is_user
-                ? "bg-primary text-primary-foreground"
-                : "bg-muted text-foreground"
-            }`}
-          >
-            <div className="flex items-center justify-between mb-1">
-              <div className="text-xs font-semibold opacity-90">
-                {msg.is_user ? "You" : "Paradise"}
-              </div>
-              <div className="text-xs opacity-70 ml-2">
-                {formatTime(msg.timestamp)}
-              </div>
-            </div>
-            <div className="text-sm leading-relaxed">{msg.text}</div>
-          </div>
-        </div>
-      ))}
-      <div ref={messagesEndRef} />
+    <div className="h-full flex flex-col">
+      <div className="flex-1 overflow-y-auto pr-2 space-y-3 custom-scrollbar">
+        <AnimatePresence initial={false}>
+          {messages.map((msg, index) => (
+            <motion.div
+              key={msg.id}
+              initial={{ opacity: 0, y: 20, scale: 0.95 }}
+              animate={{ opacity: 1, y: 0, scale: 1 }}
+              exit={{ opacity: 0, scale: 0.95 }}
+              transition={{
+                duration: 0.3,
+                delay: index === messages.length - 1 ? 0 : 0,
+              }}
+              className={`flex ${msg.is_user ? "justify-end" : "justify-start"}`}
+            >
+              <motion.div
+                className={`transcript-message max-w-[85%] rounded-lg px-4 py-2.5 shadow-sm transition-all ${
+                  msg.is_user
+                    ? "bg-primary text-primary-foreground"
+                    : "bg-muted text-foreground border border-border"
+                }`}
+              >
+                <div className="flex items-center justify-between mb-1">
+                  <div className={`text-xs font-semibold ${
+                    msg.is_user ? "opacity-90" : "opacity-80"
+                  }`}>
+                    {msg.is_user ? "You" : "Paradise"}
+                  </div>
+                  <div className={`text-xs ml-2 ${
+                    msg.is_user ? "opacity-70" : "opacity-60"
+                  }`}>
+                    {formatTime(msg.timestamp)}
+                  </div>
+                </div>
+                <motion.div
+                  initial={{ opacity: 0 }}
+                  animate={{ opacity: 1 }}
+                  transition={{ delay: 0.1 }}
+                  className="text-sm leading-relaxed"
+                >
+                  {msg.text}
+                </motion.div>
+              </motion.div>
+            </motion.div>
+          ))}
+        </AnimatePresence>
+        <div ref={messagesEndRef} />
+      </div>
     </div>
   );
 }

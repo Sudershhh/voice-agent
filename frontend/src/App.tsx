@@ -4,16 +4,20 @@ import {
   useSession,
   VoiceAssistantControlBar,
   RoomAudioRenderer,
+  BarVisualizer,
+  useVoiceAssistant,
 } from "@livekit/components-react";
 import { ConnectionState } from "livekit-client";
 import { createTokenSource } from "@/lib/livekit";
+import { environmentConfiguration } from "@/lib/config";
 import { VoiceAgentView } from "@/components/VoiceAgentView";
 import { FullTranscript } from "@/components/FullTranscript";
-import { PDFUpload } from "@/components/PDFUpload";
 import { ConnectionStatus } from "@/components/ConnectionStatus";
+import { HeroSection } from "@/components/HeroSection";
 import type { TranscriptMessage } from "@/types/transcript";
 import { Button } from "@/components/ui/button";
 import { Phone } from "lucide-react";
+import { motion, AnimatePresence } from "framer-motion";
 
 interface AppContentProps {
   session: ReturnType<typeof useSession>;
@@ -24,6 +28,8 @@ function AppContent({ session }: AppContentProps) {
     TranscriptMessage[]
   >([]);
   const [error, setError] = useState<string | null>(null);
+  const [isAgentConnected, setIsAgentConnected] = useState(false);
+  const { state, audioTrack } = useVoiceAssistant();
 
   const handleStartCall = async () => {
     try {
@@ -35,7 +41,6 @@ function AppContent({ session }: AppContentProps) {
       if (err instanceof Error) {
         const errorMsg = err.message;
 
-        // Check for URL-related errors
         if (
           errorMsg.includes("URL") ||
           errorMsg.includes("Invalid URL") ||
@@ -44,26 +49,20 @@ function AppContent({ session }: AppContentProps) {
         ) {
           errorMessage =
             errorMsg +
-            "\n\n💡 Tip: Check your backend .env file and ensure LIVEKIT_URL is set correctly (e.g., wss://your-project.livekit.cloud)";
-        }
-        // Check for token-related errors
-        else if (errorMsg.includes("Token") || errorMsg.includes("token")) {
+            "\n\nTip: Check your backend .env file and ensure LIVEKIT_URL is set correctly (e.g., wss://your-project.livekit.cloud)";
+        } else if (errorMsg.includes("Token") || errorMsg.includes("token")) {
           errorMessage =
             errorMsg +
-            "\n\n💡 Tip: Verify your backend .env has LIVEKIT_API_KEY and LIVEKIT_API_SECRET configured";
-        }
-        // Check for network/connection errors
-        else if (
+            "\n\nTip: Verify your backend .env has LIVEKIT_API_KEY and LIVEKIT_API_SECRET configured";
+        } else if (
           errorMsg.includes("Failed to fetch") ||
           errorMsg.includes("NetworkError") ||
           errorMsg.includes("fetch")
         ) {
           errorMessage =
-            "Failed to connect to backend API.\n\n💡 Tip: Make sure your backend server is running on " +
-            (import.meta.env.VITE_API_URL || "http://localhost:8000");
-        }
-        // Use the error message as-is for other cases
-        else {
+            "Failed to connect to backend API.\n\nTip: Make sure your backend server is running on " +
+            environmentConfiguration.apiUrl;
+        } else {
           errorMessage = errorMsg;
         }
       } else {
@@ -76,20 +75,14 @@ function AppContent({ session }: AppContentProps) {
     }
   };
 
-  const handleEndCall = async () => {
-    try {
-      await session.end();
-      setTranscriptMessages([]);
-    } catch (err) {
-      console.error("Failed to end session:", err);
-    }
-  };
-
   const handleMessagesChange = (messages: TranscriptMessage[]) => {
     setTranscriptMessages(messages);
   };
 
-  // Get connection state - ConnectionState is an enum
+  const handleAgentConnectionChange = (connected: boolean) => {
+    setIsAgentConnected(connected);
+  };
+
   const connectionState = session.connectionState;
   const isConnected = connectionState === ConnectionState.Connected;
   const isConnecting =
@@ -98,113 +91,182 @@ function AppContent({ session }: AppContentProps) {
 
   return (
     <div className="min-h-screen bg-background">
-      <div className="max-w-4xl mx-auto p-8 space-y-8">
-        {/* Header */}
-        <header className="text-center space-y-2">
-          <h1 className="text-4xl font-bold">Paradise</h1>
-          <p className="text-muted-foreground">
-            Your AI travel planning voice agent
-          </p>
-        </header>
+      <AnimatePresence mode="wait">
+        {!isConnected ? (
+          <motion.div
+            key="initial"
+            initial={{ opacity: 0 }}
+            animate={{ opacity: 1 }}
+            exit={{ opacity: 0 }}
+            transition={{ duration: 0.3 }}
+            className="h-screen flex flex-col overflow-hidden relative"
+          >
+            <AnimatePresence>
+              {error && (
+                <motion.div
+                  initial={{ opacity: 0, y: -10 }}
+                  animate={{ opacity: 1, y: 0 }}
+                  exit={{ opacity: 0, y: -10 }}
+                  className="absolute top-4 left-1/2 transform -translate-x-1/2 z-50 w-full max-w-2xl px-4"
+                >
+                  <div className="bg-destructive/10 border border-destructive/20 rounded-lg p-4 shadow-sm">
+                    <p className="text-sm text-destructive whitespace-pre-line">
+                      {error}
+                    </p>
+                  </div>
+                </motion.div>
+              )}
+            </AnimatePresence>
 
-        {/* Connection Controls */}
-        <div className="flex flex-col items-center gap-4">
-          {!isConnected && !isConnecting && (
-            <Button onClick={handleStartCall} size="lg" className="gap-2">
-              <Phone className="h-5 w-5" />
-              Start Call
-            </Button>
-          )}
-
-          {isConnected && (
-            <Button
-              onClick={handleEndCall}
-              variant="destructive"
-              size="lg"
-              className="gap-2"
+            {transcriptMessages.length === 0 ? (
+              <>
+                {isConnecting ? (
+                  <motion.div
+                    initial={{ opacity: 0 }}
+                    animate={{ opacity: 1 }}
+                    className="h-screen flex items-center justify-center"
+                  >
+                    <div className="bg-card rounded-lg border border-border shadow-sm p-6">
+                      <div className="flex flex-col items-center justify-center py-12 space-y-4">
+                        <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-primary"></div>
+                        <div className="text-center space-y-2">
+                          <p className="text-lg font-semibold">
+                            Connecting to Paradise...
+                          </p>
+                          <p className="text-sm text-muted-foreground">
+                            Establishing connection to LiveKit room...
+                          </p>
+                        </div>
+                      </div>
+                    </div>
+                  </motion.div>
+                ) : (
+                  <HeroSection
+                    onStartCall={handleStartCall}
+                    isConnecting={isConnecting}
+                  />
+                )}
+              </>
+            ) : (
+              <motion.div
+                initial={{ opacity: 0, y: 20 }}
+                animate={{ opacity: 1, y: 0 }}
+                transition={{ duration: 0.4 }}
+                className="flex-1 min-h-0 flex flex-col items-center justify-center gap-6 p-8"
+              >
+                <div className="w-full max-w-4xl bg-card rounded-lg border border-border shadow-lg p-6 flex flex-col h-full max-h-[70vh] overflow-hidden">
+                  <FullTranscript messages={transcriptMessages} />
+                </div>
+                <motion.div
+                  initial={{ opacity: 0, y: 10 }}
+                  animate={{ opacity: 1, y: 0 }}
+                  transition={{ duration: 0.4, delay: 0.2 }}
+                  className="flex justify-center"
+                >
+                  <motion.div
+                    whileHover={{ scale: 1.05 }}
+                    whileTap={{ scale: 0.95 }}
+                  >
+                    <Button
+                      onClick={handleStartCall}
+                      size="lg"
+                      className="gap-2"
+                    >
+                      <Phone className="h-5 w-5" />
+                      Start New Call
+                    </Button>
+                  </motion.div>
+                </motion.div>
+              </motion.div>
+            )}
+          </motion.div>
+        ) : (
+          <motion.div
+            key="call"
+            initial={{ opacity: 0 }}
+            animate={{ opacity: 1 }}
+            exit={{ opacity: 0 }}
+            transition={{ duration: 0.3 }}
+            className="min-h-screen w-full"
+          >
+            <motion.header
+              initial={{ y: -20, opacity: 0 }}
+              animate={{ y: 0, opacity: 1 }}
+              className="bg-card border-b border-border shadow-sm p-4 flex items-center justify-between"
             >
-              End Call
-            </Button>
-          )}
+              <div className="flex items-center gap-4">
+                <h1 className="text-2xl font-bold text-foreground">Paradise</h1>
+                {isAgentConnected && (
+                  <motion.div
+                    initial={{ opacity: 0, scale: 0.8 }}
+                    animate={{ opacity: 1, scale: 1 }}
+                    transition={{ duration: 0.3 }}
+                  >
+                    <ConnectionStatus
+                      connectionState={session.connectionState}
+                      isAgentConnected={isAgentConnected}
+                    />
+                  </motion.div>
+                )}
+              </div>
+            </motion.header>
 
-          <ConnectionStatus connectionState={session.connectionState} />
-        </div>
+            <AnimatePresence>
+              {error && (
+                <motion.div
+                  initial={{ opacity: 0, y: -10 }}
+                  animate={{ opacity: 1, y: 0 }}
+                  exit={{ opacity: 0, y: -10 }}
+                  className="bg-destructive/10 border-b border-destructive/20 p-4"
+                >
+                  <p className="text-sm text-destructive whitespace-pre-line">
+                    {error}
+                  </p>
+                </motion.div>
+              )}
+            </AnimatePresence>
 
-        {/* Error Message */}
-        {error && (
-          <div className="bg-destructive/10 border border-destructive/20 rounded-lg p-4">
-            <p className="text-sm text-destructive whitespace-pre-line">
-              {error}
-            </p>
-          </div>
-        )}
+            <div className="flex flex-col h-[calc(100vh-64px)]">
+              <div className="flex-1 min-h-0">
+                <VoiceAgentView
+                  onMessagesChange={handleMessagesChange}
+                  onAgentConnectionChange={handleAgentConnectionChange}
+                />
+              </div>
 
-        {/* Loading State */}
-        {isConnecting && (
-          <div className="bg-card rounded-lg border p-6">
-            <div className="flex flex-col items-center justify-center py-12 space-y-4">
-              <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-primary"></div>
-              <div className="text-center space-y-2">
-                <p className="text-lg font-semibold">
-                  Connecting to Paradise...
-                </p>
-                <p className="text-sm text-muted-foreground">
-                  Establishing connection to LiveKit room...
-                </p>
+              <div className="border-t border-border bg-muted/30 backdrop-blur-sm">
+                <div className="max-w-full mx-auto px-4 py-1.5">
+                  <VoiceAssistantControlBar />
+                  {audioTrack && (
+                    <div className="flex justify-center items-center mt-1.5 gap-2">
+                      <span className="text-xs font-medium text-muted-foreground">
+                        Agent:
+                      </span>
+                      <BarVisualizer
+                        state={state}
+                        track={audioTrack}
+                        barCount={12}
+                        options={{ minHeight: 25, maxHeight: 100 }}
+                        className="agent-visualizer"
+                      />
+                    </div>
+                  )}
+                </div>
               </div>
             </div>
-          </div>
-        )}
-
-        {/* Main Content - Voice Agent View */}
-        {isConnected && (
-          <>
-            <VoiceAgentView onMessagesChange={handleMessagesChange} />
-
-            <div className="bg-card rounded-lg border p-6">
-              <h2 className="text-xl font-semibold mb-4">Upload Travel PDF</h2>
-              <PDFUpload />
-            </div>
-          </>
-        )}
-
-        {/* Full Transcript (when disconnected) */}
-        {!isConnected && transcriptMessages.length > 0 && (
-          <div className="bg-card rounded-lg border p-6">
-            <FullTranscript messages={transcriptMessages} />
-          </div>
-        )}
-
-        {/* Empty State */}
-        {!isConnected && transcriptMessages.length === 0 && !isConnecting && (
-          <div className="text-center text-sm text-muted-foreground py-12">
-            <p>Click "Start Call" to begin your conversation with Paradise.</p>
-            <p className="mt-2 text-xs">
-              Make sure the backend API server is running and configured with
-              LiveKit credentials.
-            </p>
-          </div>
-        )}
-
-        {/* Controls and Audio Renderer */}
-        {isConnected && (
-          <>
-            <VoiceAssistantControlBar />
             <RoomAudioRenderer />
-          </>
+          </motion.div>
         )}
-      </div>
+      </AnimatePresence>
     </div>
   );
 }
 
 function App() {
-  // Create token source using TokenSource.custom() - memoize to avoid recreating on each render
   const tokenSource = useMemo(() => {
     return createTokenSource();
   }, []);
 
-  // Create session using useSession hook with token source
   const session = useSession(tokenSource);
 
   return (

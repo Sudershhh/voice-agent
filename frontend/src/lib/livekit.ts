@@ -33,7 +33,6 @@ export function createTokenSource() {
 
     const data = await response.json();
     
-    // Validate response fields exist
     if (!data.token || typeof data.token !== 'string') {
       throw new Error(
         'Invalid response: Token is missing or invalid. Check backend token generation.'
@@ -46,7 +45,6 @@ export function createTokenSource() {
       );
     }
 
-    // Validate URL format - LiveKit requires wss:// or ws:// protocol
     if (!data.url.startsWith('wss://') && !data.url.startsWith('ws://')) {
       throw new Error(
         `Invalid URL format: "${data.url}". LiveKit URL must start with wss:// or ws://. ` +
@@ -54,11 +52,9 @@ export function createTokenSource() {
       );
     }
     
-    // Map backend response { token, url, room } to LiveKit's expected format
-    // TokenSourceResponseObject expects participantToken and serverUrl (not url!)
     return {
       participantToken: data.token,
-      serverUrl: data.url,  // LiveKit expects 'serverUrl', not 'url'
+      serverUrl: data.url,
     };
   });
 }

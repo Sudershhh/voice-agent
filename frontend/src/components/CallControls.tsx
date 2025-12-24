@@ -1,4 +1,3 @@
-import { useState } from "react";
 import { Button } from "@/components/ui/button";
 import { Phone, PhoneOff } from "lucide-react";
 
@@ -51,4 +50,3 @@ export function CallControls({
     </div>
   );
 }
-
