@@ -36,7 +36,7 @@ export function FullTranscript({ messages }: FullTranscriptProps) {
   const copyToClipboard = () => {
     const transcriptText = messages
       .map((msg) => {
-        const speaker = msg.is_user ? "You" : "Paradise";
+        const speaker = msg.is_user ? "You" : "Paradise AI";
         const time = formatTime(msg.timestamp);
         return `[${time}] ${speaker}: ${msg.text}`;
       })
@@ -50,7 +50,7 @@ export function FullTranscript({ messages }: FullTranscriptProps) {
   const exportAsText = () => {
     const transcriptText = messages
       .map((msg) => {
-        const speaker = msg.is_user ? "You" : "Paradise";
+        const speaker = msg.is_user ? "You" : "Paradise AI";
         const time = formatFullDateTime(msg.timestamp);
         return `[${time}] ${speaker}: ${msg.text}`;
       })
@@ -60,7 +60,7 @@ export function FullTranscript({ messages }: FullTranscriptProps) {
     const url = URL.createObjectURL(blob);
     const a = document.createElement("a");
     a.href = url;
-    a.download = `paradise-transcript-${
+    a.download = `paradise-ai-transcript-${
       new Date().toISOString().split("T")[0]
     }.txt`;
     document.body.appendChild(a);
@@ -83,13 +83,13 @@ export function FullTranscript({ messages }: FullTranscriptProps) {
         <div className="flex gap-2">
           <button
             onClick={copyToClipboard}
-            className="px-4 py-2 text-sm font-medium bg-secondary text-secondary-foreground rounded-md hover:bg-secondary/80 transition-colors shadow-sm"
+            className="px-4 py-2 text-sm font-medium bg-secondary text-secondary-foreground rounded-md hover:bg-secondary/80 transition-colors shadow-sm cursor-pointer"
           >
             Copy
           </button>
           <button
             onClick={exportAsText}
-            className="px-4 py-2 text-sm font-medium bg-secondary text-secondary-foreground rounded-md hover:bg-secondary/80 transition-colors shadow-sm"
+            className="px-4 py-2 text-sm font-medium bg-secondary text-secondary-foreground rounded-md hover:bg-secondary/80 transition-colors shadow-sm cursor-pointer"
           >
             Export
           </button>

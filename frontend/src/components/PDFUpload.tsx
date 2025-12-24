@@ -169,7 +169,7 @@ export function PDFUpload({ onUploadSuccess }: PDFUploadProps) {
         transition={{ delay: 0.2 }}
         className="text-xs text-muted-foreground"
       >
-        Upload a travel guide PDF to enhance Paradise's knowledge. The PDF will be processed and indexed for retrieval.
+        Upload a travel guide PDF to enhance Paradise AI's knowledge. The PDF will be processed and indexed for retrieval.
       </motion.p>
     </motion.div>
   );

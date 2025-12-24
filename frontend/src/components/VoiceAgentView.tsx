@@ -121,7 +121,7 @@ export function VoiceAgentView({
                     What I Can Help With
                   </h2>
                   <p className="text-xs text-muted-foreground">
-                    Paradise is your comprehensive travel planning assistant
+                    Paradise AI is your comprehensive travel planning assistant
                   </p>
                 </div>
                 <div className="space-y-2 flex-1 mb-6">

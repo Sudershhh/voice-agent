@@ -1,0 +1,27 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100">
+  <!-- Earth globe with continents -->
+  <circle cx="50" cy="50" r="45" fill="#4A90E2" stroke="#2E5C8A" stroke-width="2"/>
+  
+  <!-- Continents (simplified shapes) -->
+  <!-- North America -->
+  <path d="M 25 30 Q 30 25, 35 30 Q 40 28, 45 30 Q 50 25, 55 30 Q 50 35, 45 40 Q 35 38, 30 40 Q 25 35, 25 30" fill="#5BA55B" opacity="0.8"/>
+  
+  <!-- South America -->
+  <path d="M 35 45 Q 40 50, 35 55 Q 30 60, 30 65 Q 35 70, 40 68 Q 45 65, 45 60 Q 45 55, 40 50 Q 35 45, 35 45" fill="#5BA55B" opacity="0.8"/>
+  
+  <!-- Europe/Africa -->
+  <path d="M 50 25 Q 55 30, 60 35 Q 65 40, 65 50 Q 60 55, 55 60 Q 50 65, 50 70 Q 55 75, 60 72 Q 65 70, 70 65 Q 65 60, 60 55 Q 55 50, 50 45 Q 50 35, 50 25" fill="#5BA55B" opacity="0.8"/>
+  
+  <!-- Asia -->
+  <path d="M 60 25 Q 70 30, 75 35 Q 70 40, 65 45 Q 60 50, 65 55 Q 70 50, 75 45 Q 70 40, 65 35 Q 60 30, 60 25" fill="#5BA55B" opacity="0.8"/>
+  
+  <!-- Australia -->
+  <ellipse cx="70" cy="65" rx="8" ry="5" fill="#5BA55B" opacity="0.8"/>
+  
+  <!-- Grid lines for globe effect -->
+  <ellipse cx="50" cy="50" rx="45" ry="20" fill="none" stroke="#2E5C8A" stroke-width="0.5" opacity="0.3"/>
+  <ellipse cx="50" cy="50" rx="45" ry="30" fill="none" stroke="#2E5C8A" stroke-width="0.5" opacity="0.3"/>
+  <line x1="5" y1="50" x2="95" y2="50" stroke="#2E5C8A" stroke-width="0.5" opacity="0.3"/>
+  <line x1="50" y1="5" x2="50" y2="95" stroke="#2E5C8A" stroke-width="0.5" opacity="0.3"/>
+</svg>
+

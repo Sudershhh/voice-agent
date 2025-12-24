@@ -131,7 +131,7 @@ function AppContent({ session }: AppContentProps) {
                         <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-primary"></div>
                         <div className="text-center space-y-2">
                           <p className="text-lg font-semibold">
-                            Connecting to Paradise...
+                            Connecting to Paradise AI...
                           </p>
                           <p className="text-sm text-muted-foreground">
                             Establishing connection to LiveKit room...
@@ -195,7 +195,9 @@ function AppContent({ session }: AppContentProps) {
               className="bg-card border-b border-border shadow-sm p-4 flex items-center justify-between"
             >
               <div className="flex items-center gap-4">
-                <h1 className="text-2xl font-bold text-foreground">Paradise</h1>
+                <h1 className="text-2xl font-bold text-foreground">
+                  Paradise AI
+                </h1>
                 {isAgentConnected && (
                   <motion.div
                     initial={{ opacity: 0, scale: 0.8 }}

@@ -111,7 +111,7 @@ export function Transcript({ onMessagesChange }: TranscriptProps) {
                   <div className={`text-xs font-semibold ${
                     msg.is_user ? "opacity-90" : "opacity-80"
                   }`}>
-                    {msg.is_user ? "You" : "Paradise"}
+                    {msg.is_user ? "You" : "Paradise AI"}
                   </div>
                   <div className={`text-xs ml-2 ${
                     msg.is_user ? "opacity-70" : "opacity-60"
