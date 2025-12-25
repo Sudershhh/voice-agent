@@ -3,6 +3,7 @@
 import json
 import logging
 import requests
+import unicodedata
 from typing import Dict, List, Optional
 import googlemaps
 from googlemaps.exceptions import ApiError as GoogleMapsApiError
@@ -21,6 +22,25 @@ KNOWN_COUNTRIES = {
     "russia", "poland", "czech republic", "hungary", "romania", "croatia", "norway",
     "sweden", "denmark", "finland", "iceland", "ireland", "scotland", "wales"
 }
+
+
+def normalize_unicode(text: str) -> str:
+    """
+    Normalize Unicode text by removing diacritics (accents, umlauts, etc.).
+    
+    This converts characters like "Zürich" → "Zurich", "São Paulo" → "Sao Paulo",
+    "München" → "Munchen" to enable proper dictionary lookups.
+    
+    Args:
+        text: Input text that may contain Unicode characters with diacritics
+        
+    Returns:
+        Normalized text with diacritics removed
+    """
+    # Normalize to NFD (decomposed form) which separates base characters from diacritics
+    normalized = unicodedata.normalize('NFD', text)
+    # Filter out combining characters (diacritics) and return ASCII-compatible string
+    return ''.join(char for char in normalized if unicodedata.category(char) != 'Mn')
 
 def validate_destination(location: str) -> Dict:
     """
@@ -162,25 +182,36 @@ def get_airport_code(location: str) -> str:
     """
     Convert city name to IATA airport code.
     
+    This function handles Unicode normalization to match city names with diacritics
+    (e.g., "Zürich" → "zurich" → "ZRH", "São Paulo" → "sao paulo" → "GRU").
+    
     Args:
         location: City name or airport code
         
     Returns:
-        IATA airport code (3-letter code)
+        IATA airport code (3-letter code), or original location if no match found
     """
-    location_lower = location.lower().strip()
-    
-    if location_lower in CITY_TO_AIRPORT:
-        airport_code = CITY_TO_AIRPORT[location_lower]
-        return airport_code
-    
+    # If already a 3-letter uppercase code, return it
     if len(location) == 3 and location.isupper():
         return location
     
+    # Normalize Unicode (remove diacritics) and convert to lowercase for lookup
+    normalized_location = normalize_unicode(location).lower().strip()
+    
+    # Direct lookup in dictionary
+    if normalized_location in CITY_TO_AIRPORT:
+        airport_code = CITY_TO_AIRPORT[normalized_location]
+        logger.debug(f"Found airport code for '{location}' (normalized: '{normalized_location}'): {airport_code}")
+        return airport_code
+    
+    # Fuzzy matching: check if normalized location contains or is contained in any city name
     for city, code in CITY_TO_AIRPORT.items():
-        if city in location_lower or location_lower in city:
+        if city in normalized_location or normalized_location in city:
+            logger.debug(f"Fuzzy matched '{location}' (normalized: '{normalized_location}') to '{city}': {code}")
             return code
     
+    # No match found - return original location (will be logged as error in get_flight_prices)
+    logger.warning(f"Could not find airport code for '{location}' (normalized: '{normalized_location}')")
     return location
 
 
@@ -290,6 +321,36 @@ def get_flight_prices(
     
     departure_code = get_airport_code(validated_departure)
     arrival_code = get_airport_code(validated_arrival)
+    
+    # Validate that airport codes are 3-letter uppercase codes before making API request
+    def is_valid_airport_code(code: str) -> bool:
+        """Check if code is a valid 3-letter uppercase airport code."""
+        return len(code) == 3 and code.isupper() and code.isalpha()
+    
+    # Check departure code
+    if not is_valid_airport_code(departure_code):
+        logger.error(f"Invalid departure airport code: '{departure_code}' (from '{validated_departure}'). "
+                    f"Expected 3-letter uppercase code (e.g., ATL, JFK, ZRH).")
+        error_result = {
+            "error": f"Could not find airport code for departure city '{validated_departure}'. "
+                    f"Please provide a specific city name or airport code (e.g., 'Atlanta' or 'ATL').",
+            "flights": []
+        }
+        return error_result
+    
+    # Check arrival code
+    if not is_valid_airport_code(arrival_code):
+        logger.error(f"Invalid arrival airport code: '{arrival_code}' (from '{validated_arrival}'). "
+                    f"Expected 3-letter uppercase code (e.g., ATL, JFK, ZRH).")
+        error_result = {
+            "error": f"Could not find airport code for arrival city '{validated_arrival}'. "
+                    f"Please provide a specific city name or airport code (e.g., 'Zurich' or 'ZRH').",
+            "flights": []
+        }
+        return error_result
+    
+    logger.info(f"Using airport codes - Departure: {departure_code} ({validated_departure}), "
+               f"Arrival: {arrival_code} ({validated_arrival})")
     
     if return_date:
         flight_type = "round-trip"

@@ -30,10 +30,17 @@ except ImportError:
     except ImportError:
         ConversationBufferMemory = None
 from langchain_core.tools import StructuredTool, tool
-from langchain.agents import AgentExecutor, create_openai_tools_agent
+# LangChain 1.x uses create_agent instead of AgentExecutor
+try:
+    from langchain.agents import create_agent
+except ImportError:
+    # Fallback for older versions
+    from langchain.agents import AgentExecutor, create_openai_tools_agent
+    create_agent = None
 from langchain_core.callbacks.base import BaseCallbackHandler
 from langchain_core.agents import AgentAction, AgentFinish
 from langchain_core.outputs import LLMResult
+from langgraph.checkpoint.memory import InMemorySaver
 from rag.retriever import (
     create_vector_store,
     get_retriever,
@@ -746,25 +753,36 @@ WORKFLOW TRANSITIONS:
             tools = [rag_tool]
         
         if tools:
-            prompt = ChatPromptTemplate.from_messages([
-                ("system", system_prompt),
-                MessagesPlaceholder(variable_name="chat_history"),
-                ("human", "{input}"),
-                MessagesPlaceholder(variable_name="agent_scratchpad"),
-            ])
-            
-            agent = create_openai_tools_agent(llm, tools, prompt)
-            callback_handler = ToolCallCallbackHandler(announcement_callback=announcement_callback)
-            
-            agent_executor = AgentExecutor(
-                agent=agent,
-                tools=tools,
-                verbose=True,
-                handle_parsing_errors=True,
-                callbacks=[callback_handler],
-            )
-            
-            return agent_executor
+            # LangChain 1.x: Use create_agent API
+            if create_agent is not None:
+                agent = create_agent(
+                    model=llm,
+                    tools=tools,
+                    system_prompt=system_prompt,
+                    checkpointer=InMemorySaver(),
+                )
+                return agent
+            else:
+                # Fallback for older versions
+                prompt = ChatPromptTemplate.from_messages([
+                    ("system", system_prompt),
+                    MessagesPlaceholder(variable_name="chat_history"),
+                    ("human", "{input}"),
+                    MessagesPlaceholder(variable_name="agent_scratchpad"),
+                ])
+                
+                agent = create_openai_tools_agent(llm, tools, prompt)
+                callback_handler = ToolCallCallbackHandler(announcement_callback=announcement_callback)
+                
+                agent_executor = AgentExecutor(
+                    agent=agent,
+                    tools=tools,
+                    verbose=True,
+                    handle_parsing_errors=True,
+                    callbacks=[callback_handler],
+                )
+                
+                return agent_executor
         else:
             # Fallback: Create retriever for ConversationalRetrievalChain
             # Note: This path is only used if use_tools=False
@@ -795,24 +813,35 @@ WORKFLOW TRANSITIONS:
             return chain
     else:
         if use_tools and tools:
-            prompt = ChatPromptTemplate.from_messages([
-                ("system", system_prompt),
-                MessagesPlaceholder(variable_name="chat_history"),
-                ("human", "{input}"),
-                MessagesPlaceholder(variable_name="agent_scratchpad"),
-            ])
-            
-            agent = create_openai_tools_agent(llm, tools, prompt)
-            callback_handler = ToolCallCallbackHandler()
-            
-            agent_executor = AgentExecutor(
-                agent=agent,
-                tools=tools,
-                verbose=True,
-                handle_parsing_errors=True,
-                callbacks=[callback_handler],
-            )
-            return agent_executor
+            # LangChain 1.x: Use create_agent API
+            if create_agent is not None:
+                agent = create_agent(
+                    model=llm,
+                    tools=tools,
+                    system_prompt=system_prompt,
+                    checkpointer=InMemorySaver(),
+                )
+                return agent
+            else:
+                # Fallback for older versions
+                prompt = ChatPromptTemplate.from_messages([
+                    ("system", system_prompt),
+                    MessagesPlaceholder(variable_name="chat_history"),
+                    ("human", "{input}"),
+                    MessagesPlaceholder(variable_name="agent_scratchpad"),
+                ])
+                
+                agent = create_openai_tools_agent(llm, tools, prompt)
+                callback_handler = ToolCallCallbackHandler()
+                
+                agent_executor = AgentExecutor(
+                    agent=agent,
+                    tools=tools,
+                    verbose=True,
+                    handle_parsing_errors=True,
+                    callbacks=[callback_handler],
+                )
+                return agent_executor
         else:
             prompt = ChatPromptTemplate.from_messages([
                 ("system", system_prompt),
@@ -826,7 +855,44 @@ WORKFLOW TRANSITIONS:
 
 async def get_agent_response(chain, user_input: str, chat_history: list = None, use_rag: bool = True, use_tools: bool = True, announcement_callback=None):
     """Get response from the agent."""
-    if isinstance(chain, AgentExecutor):
+    # Check if it's the new create_agent API (has invoke method and accepts messages)
+    if hasattr(chain, 'invoke') and not isinstance(chain, type) and create_agent is not None:
+        # LangChain 1.x create_agent API
+        if chat_history is None:
+            chat_history = []
+        
+        # Build messages list
+        messages = []
+        for msg in chat_history:
+            if msg["role"] == "user":
+                messages.append(HumanMessage(content=msg["content"]))
+            elif msg["role"] == "assistant":
+                messages.append(AIMessage(content=msg["content"]))
+        
+        # Add current user input
+        messages.append(HumanMessage(content=user_input))
+        
+        # Use thread_id for conversation memory
+        import uuid
+        thread_id = str(uuid.uuid4())  # In production, use consistent thread_id per conversation
+        
+        result = await chain.ainvoke(
+            {"messages": messages},
+            {"configurable": {"thread_id": thread_id}}
+        )
+        
+        # Extract response from result
+        if isinstance(result, dict):
+            if "messages" in result:
+                # Get last message (agent response)
+                last_msg = result["messages"][-1]
+                if hasattr(last_msg, 'content'):
+                    return last_msg.content
+                return str(last_msg)
+            return result.get("output", str(result))
+        return str(result)
+    elif hasattr(chain, 'ainvoke') and ('AgentExecutor' in str(type(chain)) or (create_agent is None)):
+        # Old AgentExecutor API (fallback)
         if chat_history is None:
             chat_history = []
         
