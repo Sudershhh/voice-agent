@@ -6,8 +6,29 @@ from langchain_openai import ChatOpenAI
 from config import config
 from langchain_core.prompts import ChatPromptTemplate, MessagesPlaceholder
 from langchain_core.messages import HumanMessage, AIMessage
-from langchain.chains import ConversationalRetrievalChain
-from langchain.memory import ConversationBufferMemory
+# LangChain 1.x compatibility - chains and memory imports
+# In LangChain 1.x, these may be in different locations
+try:
+    # Try standard location first
+    from langchain.chains import ConversationalRetrievalChain
+except ImportError:
+    try:
+        # Try langchain.chains.conversational_retrieval
+        from langchain.chains.conversational_retrieval import ConversationalRetrievalChain
+    except ImportError:
+        try:
+            # Try langchain_community
+            from langchain_community.chains.conversational_retrieval import ConversationalRetrievalChain
+        except ImportError:
+            ConversationalRetrievalChain = None
+
+try:
+    from langchain.memory import ConversationBufferMemory
+except ImportError:
+    try:
+        from langchain_community.memory import ConversationBufferMemory
+    except ImportError:
+        ConversationBufferMemory = None
 from langchain_core.tools import StructuredTool, tool
 from langchain.agents import AgentExecutor, create_openai_tools_agent
 from langchain_core.callbacks.base import BaseCallbackHandler
@@ -745,7 +766,13 @@ WORKFLOW TRANSITIONS:
             
             return agent_executor
         else:
-            # Create retriever for ConversationalRetrievalChain
+            # Fallback: Create retriever for ConversationalRetrievalChain
+            # Note: This path is only used if use_tools=False
+            if ConversationalRetrievalChain is None or ConversationBufferMemory is None:
+                raise ImportError(
+                    "ConversationalRetrievalChain or ConversationBufferMemory not available. "
+                    "Please install langchain-community or use tools-based agent (use_tools=True)."
+                )
             retriever = vector_store.as_retriever(search_kwargs={"k": 5})
             memory = ConversationBufferMemory(
                 memory_key="chat_history",
