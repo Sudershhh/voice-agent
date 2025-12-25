@@ -4,9 +4,9 @@ from typing import List, Optional, Dict, Any
 from pinecone import Pinecone, ServerlessSpec
 from langchain_pinecone import PineconeVectorStore
 from langchain_openai import OpenAIEmbeddings
-from langchain.schema import BaseRetriever
-from langchain.callbacks.manager import CallbackManagerForRetrieverRun
-from langchain.schema import Document
+from langchain_core.retrievers import BaseRetriever
+from langchain_core.callbacks.manager import CallbackManagerForRetrieverRun
+from langchain_core.documents import Document
 from config import config
 
 

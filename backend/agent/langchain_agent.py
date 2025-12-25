@@ -4,14 +4,15 @@ import json
 from typing import Optional
 from langchain_openai import ChatOpenAI
 from config import config
-from langchain.prompts import ChatPromptTemplate, MessagesPlaceholder
-from langchain.schema import HumanMessage, AIMessage
+from langchain_core.prompts import ChatPromptTemplate, MessagesPlaceholder
+from langchain_core.messages import HumanMessage, AIMessage
 from langchain.chains import ConversationalRetrievalChain
 from langchain.memory import ConversationBufferMemory
-from langchain.tools import StructuredTool, tool
+from langchain_core.tools import StructuredTool, tool
 from langchain.agents import AgentExecutor, create_openai_tools_agent
-from langchain.callbacks.base import BaseCallbackHandler
-from langchain.schema import AgentAction, AgentFinish, LLMResult
+from langchain_core.callbacks.base import BaseCallbackHandler
+from langchain_core.agents import AgentAction, AgentFinish
+from langchain_core.outputs import LLMResult
 from rag.retriever import (
     create_vector_store,
     get_retriever,
