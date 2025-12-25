@@ -5,7 +5,7 @@ import re
 from typing import List, Dict, Tuple, Optional
 from pathlib import Path
 from pypdf import PdfReader
-from langchain.text_splitter import RecursiveCharacterTextSplitter
+from langchain_text_splitters import RecursiveCharacterTextSplitter
 from langchain_openai import OpenAIEmbeddings
 from rag.document_classifier import (
     classify_document_type,
